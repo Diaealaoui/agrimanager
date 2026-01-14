@@ -1,10 +1,11 @@
 import os
+import streamlit as st
 import pandas as pd
 from supabase import create_client
-from dotenv import load_dotenv
+supabase_url = st.secrets["SUPABASE_URL"]
+supabase_key = st.secrets["SUPABASE_KEY"]
 
-load_dotenv()
-supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
+supabase = create_client(supabase_url, supabase_key)
 
 # --- AUTH (UNCHANGED AS REQUESTED) ---
 def login_user(email, password):
