@@ -23,6 +23,7 @@ export default function StatisticsScreen() {
   const [searchQuery, setSearchQuery] = useState('')
   const [suggestions, setSuggestions] = useState<any[]>([])
   const [searchResult, setSearchResult] = useState<any>(null)
+  const [selectedMonthlyPoint, setSelectedMonthlyPoint] = useState<{ label: string; value: number } | null>(null)
 
   const years = Array.from({ length: 6 }, (_, i) => new Date().getFullYear() - i)
 
@@ -31,6 +32,10 @@ export default function StatisticsScreen() {
       loadStats()
     }
   }, [user, year])
+
+  useEffect(() => {
+    setSelectedMonthlyPoint(null)
+  }, [year])
 
   const loadStats = async () => {
     if (!user) return
@@ -271,11 +276,25 @@ export default function StatisticsScreen() {
             bezier
             style={{ borderRadius: 16 }}
             fromZero // 🛡️ Keeps chart grounded at 0
+            onDataPointClick={(data) => {
+              const label = labels[data.index] || ''
+              setSelectedMonthlyPoint(prev =>
+                prev && prev.label === label ? null : { label, value: data.value }
+              )
+            }}
           />
         ) : (
           <View style={{ padding: 20, alignItems: 'center' }}>
             <Text style={{ fontSize: 40, marginBottom: 8 }}>📉</Text>
             <Text style={{ color: colors.textSecondary }}>Pas assez de données pour le graphique.</Text>
+          </View>
+        )}
+        {hasData && selectedMonthlyPoint && (
+          <View style={{ marginTop: 12, padding: 12, backgroundColor: '#f8fafc', borderRadius: 12 }}>
+            <Text style={[typography.caption, { marginBottom: 6 }]}>Mois {selectedMonthlyPoint.label}</Text>
+            <Text style={[typography.h3, { color: colors.primary }]}>
+              {formatCurrency(selectedMonthlyPoint.value)}
+            </Text>
           </View>
         )}
       </View>
