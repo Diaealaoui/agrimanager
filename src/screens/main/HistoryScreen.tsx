@@ -22,6 +22,7 @@ export default function PurchaseDetailScreen() {
   const [suppliers, setSuppliers] = useState<string[]>([])
   const [activeIngredients, setActiveIngredients] = useState<string[]>([])
   const [exporting, setExporting] = useState(false)
+  const [tableScale, setTableScale] = useState(0.85)
 
   useEffect(() => {
     if (user) {
@@ -82,6 +83,11 @@ export default function PurchaseDetailScreen() {
 
     setExporting(true)
     try {
+      const escapeCsvValue = (value: string | number | null | undefined) => {
+        const safe = value === null || value === undefined ? '' : String(value)
+        return `"${safe.replace(/"/g, '""')}"`
+      }
+      const delimiter = ';'
       const headers = [
         'Date',
         'Produit',
@@ -97,38 +103,45 @@ export default function PurchaseDetailScreen() {
       ]
       
       const csvRows = [
-        headers.join(','),
+        headers.join(delimiter),
         ...achats.map(a => {
           const prod = a.produits || {}
           return [
-            formatDate(a.date_commande),
-            `"${a.nom || ''}"`,
-            `"${prod.type_produit || ''}"`,
-            `"${prod.matiere_active || ''}"`,
-            `"${a.fournisseur || ''}"`,
-            a.quantite_recue || 0,
-            a.unite_achat || '',
-            (a.prix_unitaire_ht || 0).toFixed(2),
-            a.taux_tva || 0,
-            (a.prix_unitaire_ttc || 0).toFixed(2),
-            (a.montant_ttc || 0).toFixed(2)
-          ].join(',')
+            escapeCsvValue(formatDate(a.date_commande)),
+            escapeCsvValue(a.nom || ''),
+            escapeCsvValue(prod.type_produit || ''),
+            escapeCsvValue(prod.matiere_active || ''),
+            escapeCsvValue(a.fournisseur || ''),
+            escapeCsvValue(a.quantite_recue || 0),
+            escapeCsvValue(a.unite_achat || ''),
+            escapeCsvValue((a.prix_unitaire_ht || 0).toFixed(2)),
+            escapeCsvValue(a.taux_tva || 0),
+            escapeCsvValue((a.prix_unitaire_ttc || 0).toFixed(2)),
+            escapeCsvValue((a.montant_ttc || 0).toFixed(2))
+          ].join(delimiter)
         })
       ]
 
-      const csvContent = csvRows.join('\n')
+      const csvContent = '\ufeff' + csvRows.join('\n')
       const fileName = `Achats_${new Date().toISOString().split('T')[0]}.csv`
-      const fileUri = `${FileSystem.documentDirectory}${fileName}`
+      const baseDirectory = FileSystem.documentDirectory || FileSystem.cacheDirectory
+      if (!baseDirectory) {
+        throw new Error('Stockage local indisponible')
+      }
+      const fileUri = `${baseDirectory}${fileName}`
 
       await FileSystem.writeAsStringAsync(fileUri, csvContent, {
         encoding: FileSystem.EncodingType.UTF8,
       })
 
-      await Sharing.shareAsync(fileUri, {
-        mimeType: 'text/csv',
-        dialogTitle: 'Télécharger le registre des achats',
-        UTI: 'public.comma-separated-values-text',
-      })
+      const canShare = await Sharing.isAvailableAsync()
+      if (canShare) {
+        await Sharing.shareAsync(fileUri, {
+          mimeType: 'text/csv',
+          dialogTitle: 'Télécharger le registre des achats',
+          UTI: 'public.comma-separated-values-text',
+        })
+      }
       
       Alert.alert('Succès', 'Fichier CSV exporté avec succès')
     } catch (error) {
@@ -245,6 +258,13 @@ export default function PurchaseDetailScreen() {
   }
 
   const totalValue = achats.reduce((sum, a) => sum + (a.montant_ttc || 0), 0)
+  const headerPadding = Math.max(8, 12 * tableScale)
+  const cellPadding = Math.max(8, 12 * tableScale)
+  const headerFontSize = Math.max(10, 12 * tableScale)
+  const cellFontSize = Math.max(10, 13 * tableScale)
+  const scaled = (value: number) => Math.round(value * tableScale)
+  const zoomOutDisabled = tableScale <= 0.7
+  const zoomInDisabled = tableScale >= 1.2
 
   if (loading) {
     return (
@@ -413,6 +433,25 @@ export default function PurchaseDetailScreen() {
         {/* Detailed Table */}
         {achats.length > 0 ? (
           <View style={[globalStyles.card, { padding: 0, overflow: 'hidden' }]}>
+            <View style={styles.tableControls}>
+              <Text style={[typography.caption, { color: colors.textSecondary }]}>Zoom tableau</Text>
+              <View style={styles.tableControlButtons}>
+                <TouchableOpacity
+                  onPress={() => setTableScale(prev => Math.max(0.7, Number((prev - 0.1).toFixed(2))))}
+                  disabled={zoomOutDisabled}
+                  style={[styles.zoomButton, zoomOutDisabled && styles.zoomButtonDisabled]}
+                >
+                  <Text style={styles.zoomButtonText}>−</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => setTableScale(prev => Math.min(1.2, Number((prev + 0.1).toFixed(2))))}
+                  disabled={zoomInDisabled}
+                  style={[styles.zoomButton, zoomInDisabled && styles.zoomButtonDisabled]}
+                >
+                  <Text style={styles.zoomButtonText}>＋</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
             <ScrollView horizontal showsHorizontalScrollIndicator={true}>
               <View>
                 {/* Table Header */}
@@ -422,17 +461,17 @@ export default function PurchaseDetailScreen() {
                   borderTopLeftRadius: 12,
                   borderTopRightRadius: 12,
                 }}>
-                  <Text style={[styles.tableHeader, { width: 110 }]}>Date</Text>
-                  <Text style={[styles.tableHeader, { width: 160 }]}>Produit</Text>
-                  <Text style={[styles.tableHeader, { width: 120 }]}>Type</Text>
-                  <Text style={[styles.tableHeader, { width: 140 }]}>Mat. Active</Text>
-                  <Text style={[styles.tableHeader, { width: 140 }]}>Fournisseur</Text>
-                  <Text style={[styles.tableHeader, { width: 80 }]}>Qté</Text>
-                  <Text style={[styles.tableHeader, { width: 70 }]}>Unité</Text>
-                  <Text style={[styles.tableHeader, { width: 90 }]}>Prix HT</Text>
-                  <Text style={[styles.tableHeader, { width: 70 }]}>TVA</Text>
-                  <Text style={[styles.tableHeader, { width: 90 }]}>Prix TTC</Text>
-                  <Text style={[styles.tableHeader, { width: 110 }]}>Total TTC</Text>
+                  <Text style={[styles.tableHeader, { width: scaled(110), padding: headerPadding, fontSize: headerFontSize }]}>Date</Text>
+                  <Text style={[styles.tableHeader, { width: scaled(160), padding: headerPadding, fontSize: headerFontSize }]}>Produit</Text>
+                  <Text style={[styles.tableHeader, { width: scaled(120), padding: headerPadding, fontSize: headerFontSize }]}>Type</Text>
+                  <Text style={[styles.tableHeader, { width: scaled(140), padding: headerPadding, fontSize: headerFontSize }]}>Mat. Active</Text>
+                  <Text style={[styles.tableHeader, { width: scaled(140), padding: headerPadding, fontSize: headerFontSize }]}>Fournisseur</Text>
+                  <Text style={[styles.tableHeader, { width: scaled(80), padding: headerPadding, fontSize: headerFontSize }]}>Qté</Text>
+                  <Text style={[styles.tableHeader, { width: scaled(70), padding: headerPadding, fontSize: headerFontSize }]}>Unité</Text>
+                  <Text style={[styles.tableHeader, { width: scaled(90), padding: headerPadding, fontSize: headerFontSize }]}>Prix HT</Text>
+                  <Text style={[styles.tableHeader, { width: scaled(70), padding: headerPadding, fontSize: headerFontSize }]}>TVA</Text>
+                  <Text style={[styles.tableHeader, { width: scaled(90), padding: headerPadding, fontSize: headerFontSize }]}>Prix TTC</Text>
+                  <Text style={[styles.tableHeader, { width: scaled(110), padding: headerPadding, fontSize: headerFontSize }]}>Total TTC</Text>
                 </View>
                 
                 {/* Table Rows */}
@@ -448,37 +487,37 @@ export default function PurchaseDetailScreen() {
                         backgroundColor: index % 2 === 0 ? 'white' : colors.backgroundAlt
                       }}
                     >
-                      <Text style={[styles.tableCell, { width: 110 }]}>
+                      <Text style={[styles.tableCell, { width: scaled(110), padding: cellPadding, fontSize: cellFontSize }]}>
                         {formatDate(a.date_commande)}
                       </Text>
-                      <Text style={[styles.tableCell, { width: 160, fontWeight: '600' }]}>
+                      <Text style={[styles.tableCell, { width: scaled(160), padding: cellPadding, fontSize: cellFontSize, fontWeight: '600' }]}>
                         {a.nom}
                       </Text>
-                      <Text style={[styles.tableCell, { width: 120 }]}>
+                      <Text style={[styles.tableCell, { width: scaled(120), padding: cellPadding, fontSize: cellFontSize }]}>
                         {prod.type_produit || '-'}
                       </Text>
-                      <Text style={[styles.tableCell, { width: 140, fontStyle: 'italic' }]}>
+                      <Text style={[styles.tableCell, { width: scaled(140), padding: cellPadding, fontSize: cellFontSize, fontStyle: 'italic' }]}>
                         {prod.matiere_active || '-'}
                       </Text>
-                      <Text style={[styles.tableCell, { width: 140 }]}>
+                      <Text style={[styles.tableCell, { width: scaled(140), padding: cellPadding, fontSize: cellFontSize }]}>
                         {a.fournisseur}
                       </Text>
-                      <Text style={[styles.tableCell, { width: 80, textAlign: 'right', fontWeight: '600' }]}>
+                      <Text style={[styles.tableCell, { width: scaled(80), padding: cellPadding, fontSize: cellFontSize, textAlign: 'right', fontWeight: '600' }]}>
                         {a.quantite_recue}
                       </Text>
-                      <Text style={[styles.tableCell, { width: 70 }]}>
+                      <Text style={[styles.tableCell, { width: scaled(70), padding: cellPadding, fontSize: cellFontSize }]}>
                         {a.unite_achat}
                       </Text>
-                      <Text style={[styles.tableCell, { width: 90, textAlign: 'right' }]}>
+                      <Text style={[styles.tableCell, { width: scaled(90), padding: cellPadding, fontSize: cellFontSize, textAlign: 'right' }]}>
                         {(a.prix_unitaire_ht || 0).toFixed(2)}
                       </Text>
-                      <Text style={[styles.tableCell, { width: 70, textAlign: 'center' }]}>
+                      <Text style={[styles.tableCell, { width: scaled(70), padding: cellPadding, fontSize: cellFontSize, textAlign: 'center' }]}>
                         {a.taux_tva}%
                       </Text>
-                      <Text style={[styles.tableCell, { width: 90, textAlign: 'right' }]}>
+                      <Text style={[styles.tableCell, { width: scaled(90), padding: cellPadding, fontSize: cellFontSize, textAlign: 'right' }]}>
                         {(a.prix_unitaire_ttc || 0).toFixed(2)}
                       </Text>
-                      <Text style={[styles.tableCell, { width: 110, color: colors.gold, fontWeight: '700', textAlign: 'right' }]}>
+                      <Text style={[styles.tableCell, { width: scaled(110), padding: cellPadding, fontSize: cellFontSize, color: colors.gold, fontWeight: '700', textAlign: 'right' }]}>
                         {formatCurrency(a.montant_ttc || 0)}
                       </Text>
                     </View>
@@ -495,19 +534,22 @@ export default function PurchaseDetailScreen() {
                   borderTopColor: colors.gold,
                 }}>
                   <Text style={[styles.tableCell, { 
-                    width: 1060, 
+                    width: scaled(1060), 
                     fontWeight: '700', 
                     color: colors.primary,
                     textAlign: 'right',
-                    paddingRight: 20
+                    paddingRight: 20,
+                    padding: cellPadding,
+                    fontSize: cellFontSize,
                   }]}>
                     TOTAL GÉNÉRAL
                   </Text>
                   <Text style={[styles.tableCell, { 
-                    width: 110, 
+                    width: scaled(110), 
                     color: colors.primary, 
                     fontWeight: '700',
-                    fontSize: 16,
+                    fontSize: Math.max(12, 16 * tableScale),
+                    padding: cellPadding,
                     textAlign: 'right' 
                   }]}>
                     {formatCurrency(totalValue)}
@@ -533,10 +575,39 @@ export default function PurchaseDetailScreen() {
 }
 
 const styles = {
-  tableHeader: {
-    padding: 14,
+  tableControls: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderLight,
+    backgroundColor: colors.backgroundAlt,
+  },
+  tableControlButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  zoomButton: {
+    backgroundColor: 'white',
+    borderRadius: 8,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    marginLeft: 8,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+  },
+  zoomButtonDisabled: {
+    opacity: 0.5,
+  },
+  zoomButtonText: {
+    fontSize: 16,
     fontWeight: '700',
-    fontSize: 12,
+    color: colors.text,
+  },
+  tableHeader: {
+    fontWeight: '700',
     color: colors.gold,
     textTransform: 'uppercase' as const,
     letterSpacing: 0.8,
@@ -544,8 +615,6 @@ const styles = {
     borderRightColor: 'rgba(212, 175, 55, 0.3)',
   },
   tableCell: {
-    padding: 14,
-    fontSize: 13,
     color: colors.text,
     borderRightWidth: 1,
     borderRightColor: colors.borderLight,
