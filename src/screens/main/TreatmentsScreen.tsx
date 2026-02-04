@@ -4,18 +4,31 @@ import { Picker } from '@react-native-picker/picker'
 import { useAuth } from '../../hooks/useAuth'
 import Database from '../../lib/database'
 import Header from '../../components/layout/Header'
-import { globalStyles, typography, colors } from '../../utils/styles'
+import { globalStyles, typography, colors, shadows } from '../../utils/styles'
 
 export default function TreatmentsScreen() {
   const { user } = useAuth()
   const [parcelles, setParcelles] = useState<any[]>([])
   const [products, setProducts] = useState<any[]>([])
+  const [productTypes, setProductTypes] = useState<string[]>([])
+  const [typeQuery, setTypeQuery] = useState('')
+  const [showTypeSuggestions, setShowTypeSuggestions] = useState(false)
   const [selectedParcelle, setSelectedParcelle] = useState('')
   const [selectedProduct, setSelectedProduct] = useState('')
   const [dose, setDose] = useState('')
   const [date, setDate] = useState(new Date().toISOString().split('T')[0])
   const [treatmentBuffer, setTreatmentBuffer] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
+
+  const filteredProducts = typeQuery.trim().length > 0
+    ? products.filter(p => (p.type_produit || '').toLowerCase().includes(typeQuery.trim().toLowerCase()))
+    : products
+
+  const filteredTypeSuggestions = typeQuery.trim().length === 0
+    ? productTypes.slice(0, 6)
+    : productTypes
+      .filter(type => type.toLowerCase().includes(typeQuery.trim().toLowerCase()))
+      .slice(0, 6)
 
   useEffect(() => {
     if (user) {
@@ -27,13 +40,15 @@ export default function TreatmentsScreen() {
     if (!user) return
     
     setLoading(true)
-    const [parcellesRes, productsRes] = await Promise.all([
+    const [parcellesRes, productsRes, typesRes] = await Promise.all([
       Database.obtenirParcelles(user.id),
       Database.obtenirProduits(user.id),
+      Database.getProductTypes(user.id),
     ])
     
     setParcelles(parcellesRes)
     setProducts(productsRes)
+    setProductTypes(typesRes)
     setLoading(false)
   }
 
@@ -110,6 +125,46 @@ export default function TreatmentsScreen() {
             ))}
           </Picker>
           
+          <Text style={[typography.caption, { marginBottom: 4 }]}>Type Produit</Text>
+          <TextInput
+            style={globalStyles.input}
+            placeholder="Ex: Fongicide"
+            value={typeQuery}
+            onChangeText={setTypeQuery}
+            onFocus={() => setShowTypeSuggestions(true)}
+            onBlur={() => setTimeout(() => setShowTypeSuggestions(false), 120)}
+          />
+          {showTypeSuggestions && filteredTypeSuggestions.length > 0 && (
+            <View style={{
+              backgroundColor: 'white',
+              borderRadius: 12,
+              borderWidth: 1,
+              borderColor: colors.border,
+              marginBottom: 12,
+              marginTop: 6,
+              maxHeight: 160,
+              ...shadows.sm,
+            }}>
+              {filteredTypeSuggestions.map(type => (
+                <TouchableOpacity
+                  key={type}
+                  onPress={() => {
+                    setTypeQuery(type)
+                    setShowTypeSuggestions(false)
+                  }}
+                  style={{
+                    paddingHorizontal: 14,
+                    paddingVertical: 10,
+                    borderBottomWidth: 1,
+                    borderBottomColor: colors.borderLight,
+                  }}
+                >
+                  <Text style={{ color: colors.text }}>{type}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+
           <Text style={[typography.caption, { marginBottom: 4 }]}>Produit</Text>
           <Picker
             selectedValue={selectedProduct}
@@ -117,7 +172,7 @@ export default function TreatmentsScreen() {
             style={{ backgroundColor: colors.card, marginBottom: 12 }}
           >
             <Picker.Item label="Sélectionner un produit" value="" />
-            {products.map(p => (
+            {filteredProducts.map(p => (
               <Picker.Item key={p.id} label={p.nom} value={p.nom} />
             ))}
           </Picker>

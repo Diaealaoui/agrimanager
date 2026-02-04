@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react'
-import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Modal, TextInput, Alert } from 'react-native'
+import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Modal, TextInput, Alert, useWindowDimensions } from 'react-native'
 import { useAuth } from '../../hooks/useAuth'
 import Database from '../../lib/database'
+import Sidebar from '../../components/layout/Sidebar'
 import { globalStyles, typography, colors, shadows } from '../../utils/styles'
 import { formatCurrency, formatDate } from '../../utils/helpers'
 
 export default function StockBoxScreen() {
   const { user } = useAuth()
+  const { width } = useWindowDimensions()
   const [products, setProducts] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedProduct, setSelectedProduct] = useState<any>(null)
@@ -14,6 +16,19 @@ export default function StockBoxScreen() {
   const [modalVisible, setModalVisible] = useState(false)
   const [editModalVisible, setEditModalVisible] = useState(false)
   const [newStock, setNewStock] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [sidebarVisible, setSidebarVisible] = useState(false)
+
+  const isSmallScreen = width < 340
+  const filteredProducts = products.filter(product => {
+    const query = searchQuery.trim().toLowerCase()
+    if (!query) return true
+    return (
+      (product.nom || '').toLowerCase().includes(query) ||
+      (product.type_produit || '').toLowerCase().includes(query) ||
+      (product.matiere_active || '').toLowerCase().includes(query)
+    )
+  })
 
   useEffect(() => {
     if (user) {
@@ -130,40 +145,70 @@ export default function StockBoxScreen() {
         borderBottomRightRadius: 30,
         ...shadows.xl,
       }}>
-        <Text style={[typography.h1, { color: colors.gold, marginBottom: 4 }]}>
-          📦 Inventaire
-        </Text>
-        <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 14 }}>
-          {products.length} produit{products.length !== 1 ? 's' : ''} en stock
-        </Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <TouchableOpacity
+            onPress={() => setSidebarVisible(true)}
+            style={{ marginRight: 12 }}
+          >
+            <Text style={{ color: 'white', fontSize: 24 }}>☰</Text>
+          </TouchableOpacity>
+          <View style={{ flex: 1 }}>
+            <Text style={[typography.h1, { color: colors.gold, marginBottom: 4 }]}>
+              📦 Inventaire
+            </Text>
+            <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 14 }}>
+              {products.length} produit{products.length !== 1 ? 's' : ''} en stock
+            </Text>
+          </View>
+        </View>
       </View>
 
-      <ScrollView style={{ flex: 1, padding: 20 }}>
-        <View style={{ 
-          flexDirection: 'row', 
-          flexWrap: 'wrap',
-          justifyContent: 'space-between',
-        }}>
-          {products.map((product) => {
-            const stockColor = getStockColor(product.stock_actuel || 0, product.type_produit || '')
-            const unitPrice = product.prix_moyen || 0
-            const stockValue = (product.stock_actuel || 0) * unitPrice
-            
-            return (
-              <TouchableOpacity
-                key={product.id}
-                onPress={() => handleProductPress(product)}
-                style={{
-                  width: '48%',
-                  backgroundColor: 'white',
-                  borderRadius: 16,
-                  padding: 16,
-                  marginBottom: 16,
-                  ...shadows.md,
-                  borderWidth: 2,
-                  borderColor: colors.borderLight,
-                }}
-              >
+      <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
+        <View style={{ padding: 20 }}>
+          <View style={{
+            backgroundColor: 'white',
+            borderRadius: 14,
+            borderWidth: 1,
+            borderColor: colors.borderLight,
+            paddingHorizontal: 14,
+            paddingVertical: 10,
+            marginBottom: 16,
+            ...shadows.sm,
+          }}>
+            <TextInput
+              placeholder="Rechercher un produit, type, ou matière active..."
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              placeholderTextColor={colors.textLight}
+              style={{ color: colors.text }}
+            />
+          </View>
+
+          <View style={{ 
+            flexDirection: 'row', 
+            flexWrap: 'wrap',
+            justifyContent: 'space-between',
+          }}>
+            {filteredProducts.map((product) => {
+              const stockColor = getStockColor(product.stock_actuel || 0, product.type_produit || '')
+              const unitPrice = product.prix_moyen || 0
+              const stockValue = (product.stock_actuel || 0) * unitPrice
+              
+              return (
+                <TouchableOpacity
+                  key={product.id}
+                  onPress={() => handleProductPress(product)}
+                  style={{
+                    width: isSmallScreen ? '100%' : '48%',
+                    backgroundColor: 'white',
+                    borderRadius: 16,
+                    padding: isSmallScreen ? 12 : 16,
+                    marginBottom: 16,
+                    ...shadows.md,
+                    borderWidth: 2,
+                    borderColor: colors.borderLight,
+                  }}
+                >
                 {/* Delete Button */}
                 <TouchableOpacity
                   onPress={() => handleDeleteProduct(product)}
@@ -298,9 +343,24 @@ export default function StockBoxScreen() {
                     ✏️ Modifier Stock
                   </Text>
                 </TouchableOpacity>
-              </TouchableOpacity>
-            )
-          })}
+                </TouchableOpacity>
+              )
+            })}
+          </View>
+
+          {filteredProducts.length === 0 && (
+            <View style={{
+              alignItems: 'center',
+              paddingVertical: 40,
+              backgroundColor: colors.backgroundAlt,
+              borderRadius: 16,
+            }}>
+              <Text style={{ fontSize: 48, marginBottom: 12 }}>🔍</Text>
+              <Text style={[typography.body, { color: colors.textSecondary, textAlign: 'center' }]}>
+                Aucun produit ne correspond à votre recherche
+              </Text>
+            </View>
+          )}
         </View>
       </ScrollView>
 
@@ -514,6 +574,11 @@ export default function StockBoxScreen() {
           </View>
         </View>
       </Modal>
+
+      <Sidebar
+        isVisible={sidebarVisible}
+        onClose={() => setSidebarVisible(false)}
+      />
     </View>
   )
 }

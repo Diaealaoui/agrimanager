@@ -14,6 +14,7 @@ const menuItems = [
   { id: 'Statistics', label: '📈 Statistiques', screen: 'Statistics' },
   { id: 'Treatments', label: '🚜 Traitements', screen: 'Treatments' },
   { id: 'Purchases', label: '🛒 Achats & Stock', screen: 'Purchases' },
+  { id: 'StockBox', label: '📦 Stock Box', screen: 'StockBox' },
   { id: 'History', label: '📜 Historique', screen: 'History' },
   { id: 'Order', label: '📝 Commande', screen: 'Order' },
   { id: 'Settings', label: '⚙️ Paramètres', screen: 'Settings' },
