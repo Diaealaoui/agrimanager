@@ -21,6 +21,7 @@ import Database from '../../lib/database'
 import { globalStyles, typography, colors, shadows } from '../../utils/styles'
 import { formatCurrency } from '../../utils/helpers'
 import { Feather } from '@expo/vector-icons'
+import Sidebar from '../../components/layout/Sidebar'
 
 interface DashboardStats {
   totalSpent: number
@@ -94,6 +95,7 @@ export default function DashboardScreen() {
   const [selectedFilter, setSelectedFilter] = useState<'all' | 'product' | 'supplier' | 'ingredient'>('all')
   const [selectedMetric, setSelectedMetric] = useState<'spending' | 'orders' | 'avg'>('spending')
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null)
+  const [sidebarVisible, setSidebarVisible] = useState(false)
 
   const [selectedItemDetails, setSelectedItemDetails] = useState<any>(null)
   const [isDetailModalVisible, setIsDetailModalVisible] = useState(false)
@@ -282,9 +284,25 @@ export default function DashboardScreen() {
           {/* Header with Search */}
           <View style={{ backgroundColor: colors.primary, padding: isSmallScreen ? 16 : 24, paddingTop: isSmallScreen ? 48 : 60, borderBottomLeftRadius: isSmallScreen ? 22 : 30, borderBottomRightRadius: isSmallScreen ? 22 : 30, ...shadows.xl }}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: isSmallScreen ? 16 : 20 }}>
-              <View>
-                <Text style={[typography.h1, { color: colors.gold, marginBottom: 4, fontSize: isSmallScreen ? 24 : 32 }]}>Tableau de Bord</Text>
-                <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: isSmallScreen ? 12 : 14 }}>Analyse financière d'exploitation</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 12 }}>
+                <TouchableOpacity
+                  onPress={() => setSidebarVisible(true)}
+                  style={{
+                    width: isSmallScreen ? 36 : 40,
+                    height: isSmallScreen ? 36 : 40,
+                    borderRadius: isSmallScreen ? 18 : 20,
+                    backgroundColor: 'rgba(255,255,255,0.15)',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    marginRight: 12,
+                  }}
+                >
+                  <Feather name="menu" size={isSmallScreen ? 18 : 20} color="white" />
+                </TouchableOpacity>
+                <View>
+                  <Text style={[typography.h1, { color: colors.gold, marginBottom: 4, fontSize: isSmallScreen ? 24 : 32 }]}>Tableau de Bord</Text>
+                  <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: isSmallScreen ? 12 : 14 }}>Analyse financière d'exploitation</Text>
+                </View>
               </View>
               <TouchableOpacity onPress={() => setIsSearching(true)} style={{ width: isSmallScreen ? 40 : 44, height: isSmallScreen ? 40 : 44, borderRadius: isSmallScreen ? 20 : 22, backgroundColor: colors.gold, justifyContent: 'center', alignItems: 'center', ...shadows.md }}>
                 <Feather name="search" size={isSmallScreen ? 20 : 22} color="white" />
@@ -568,6 +586,7 @@ export default function DashboardScreen() {
             </View>
 
           </ScrollView>
+          <Sidebar isVisible={sidebarVisible} onClose={() => setSidebarVisible(false)} />
         </View>
       </TouchableWithoutFeedback>
     </KeyboardAvoidingView>
