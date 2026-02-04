@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react'
-import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Modal, TextInput, Alert } from 'react-native'
+import React, { useState, useEffect, useMemo } from 'react'
+import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Modal, TextInput, Alert, useWindowDimensions } from 'react-native'
 import { useAuth } from '../../hooks/useAuth'
 import Database from '../../lib/database'
 import { globalStyles, typography, colors, shadows } from '../../utils/styles'
@@ -14,6 +14,9 @@ export default function StockBoxScreen() {
   const [modalVisible, setModalVisible] = useState(false)
   const [editModalVisible, setEditModalVisible] = useState(false)
   const [newStock, setNewStock] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
+  const { width } = useWindowDimensions()
+  const isCompact = width < 360
 
   useEffect(() => {
     if (user) {
@@ -111,6 +114,25 @@ export default function StockBoxScreen() {
     }
   }
 
+  const filteredProducts = useMemo(() => {
+    if (!searchQuery.trim()) return products
+    const query = searchQuery.trim().toLowerCase()
+    return products.filter(p => {
+      const nameMatch = (p.nom || '').toLowerCase().includes(query)
+      const typeMatch = (p.type_produit || '').toLowerCase().includes(query)
+      const activeMatch = (p.matiere_active || '').toLowerCase().includes(query)
+      return nameMatch || typeMatch || activeMatch
+    })
+  }, [products, searchQuery])
+
+  const columns = width < 420 ? 2 : width < 680 ? 3 : 4
+  const horizontalPadding = 20
+  const gap = 12
+  const cardWidth = Math.max(
+    140,
+    Math.floor((width - (horizontalPadding * 2) - (gap * (columns - 1))) / columns)
+  )
+
   if (loading) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.background }}>
@@ -138,13 +160,32 @@ export default function StockBoxScreen() {
         </Text>
       </View>
 
-      <ScrollView style={{ flex: 1, padding: 20 }}>
+      <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
+        <View style={{ padding: 20 }}>
+          <View style={[globalStyles.card, { padding: 12, marginBottom: 16 }]}>
+            <TextInput
+              style={[globalStyles.input, { marginBottom: 0 }]}
+              placeholder="Rechercher un produit, type, matière active..."
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              placeholderTextColor={colors.textLight}
+            />
+            {searchQuery.trim().length > 0 && (
+              <Text style={[typography.small, { color: colors.textSecondary, marginTop: 8 }]}>
+                {filteredProducts.length} résultat{filteredProducts.length > 1 ? 's' : ''}
+              </Text>
+            )}
+          </View>
+        </View>
+
+        <View style={{ flex: 1, paddingHorizontal: 20, paddingBottom: 20 }}>
         <View style={{ 
           flexDirection: 'row', 
           flexWrap: 'wrap',
           justifyContent: 'space-between',
         }}>
-          {products.map((product) => {
+          {filteredProducts.map((product, index) => {
+            const isLastInRow = (index + 1) % columns === 0
             const stockColor = getStockColor(product.stock_actuel || 0, product.type_produit || '')
             const unitPrice = product.prix_moyen || 0
             const stockValue = (product.stock_actuel || 0) * unitPrice
@@ -154,11 +195,12 @@ export default function StockBoxScreen() {
                 key={product.id}
                 onPress={() => handleProductPress(product)}
                 style={{
-                  width: '48%',
+                  width: cardWidth,
                   backgroundColor: 'white',
                   borderRadius: 16,
-                  padding: 16,
-                  marginBottom: 16,
+                  padding: isCompact ? 12 : 16,
+                  marginBottom: gap,
+                  marginRight: isLastInRow ? 0 : gap,
                   ...shadows.md,
                   borderWidth: 2,
                   borderColor: colors.borderLight,
@@ -182,17 +224,17 @@ export default function StockBoxScreen() {
 
                 {/* Icon */}
                 <View style={{ 
-                  width: 50, 
-                  height: 50, 
+                  width: isCompact ? 42 : 50, 
+                  height: isCompact ? 42 : 50, 
                   backgroundColor: stockColor + '20', 
-                  borderRadius: 25,
+                  borderRadius: isCompact ? 21 : 25,
                   justifyContent: 'center',
                   alignItems: 'center',
-                  marginBottom: 12,
+                  marginBottom: isCompact ? 8 : 12,
                   borderWidth: 2,
                   borderColor: stockColor,
                 }}>
-                  <Text style={{ fontSize: 22 }}>
+                  <Text style={{ fontSize: isCompact ? 18 : 22 }}>
                     {product.type_produit === 'Fongicide' ? '🦠' : 
                      product.type_produit === 'Insecticide' ? '🐛' : 
                      product.type_produit === 'Engrais' ? '🌱' : '📦'}
@@ -200,7 +242,7 @@ export default function StockBoxScreen() {
                 </View>
                 
                 <Text 
-                  style={[typography.h4, { marginBottom: 8 }]}
+                  style={[typography.h4, { marginBottom: isCompact ? 6 : 8, fontSize: isCompact ? 12 : 14 }]}
                   numberOfLines={2}
                 >
                   {product.nom}
@@ -209,14 +251,14 @@ export default function StockBoxScreen() {
                 {/* Stock Info */}
                 <View style={{
                   backgroundColor: colors.backgroundAlt,
-                  padding: 10,
+                  padding: isCompact ? 8 : 10,
                   borderRadius: 10,
-                  marginBottom: 8,
+                  marginBottom: isCompact ? 6 : 8,
                 }}>
                   <Text style={[typography.caption, { color: colors.textSecondary, marginBottom: 4 }]}>
                     Stock actuel
                   </Text>
-                  <Text style={[typography.h3, { color: colors.primary }]}>
+                  <Text style={[typography.h3, { color: colors.primary, fontSize: isCompact ? 13 : 16 }]}>
                     {product.stock_actuel?.toFixed(2)} {product.unite_reference}
                   </Text>
                   
@@ -251,7 +293,7 @@ export default function StockBoxScreen() {
                   <Text 
                     style={[typography.small, { 
                       color: colors.textSecondary,
-                      marginBottom: 12,
+                      marginBottom: isCompact ? 8 : 12,
                       fontStyle: 'italic'
                     }]}
                     numberOfLines={1}
@@ -263,16 +305,16 @@ export default function StockBoxScreen() {
                 {/* Stock Level Badge */}
                 <View style={{
                   paddingHorizontal: 12,
-                  paddingVertical: 6,
+                  paddingVertical: isCompact ? 4 : 6,
                   backgroundColor: stockColor + '15',
                   borderRadius: 8,
                   alignSelf: 'flex-start',
-                  marginBottom: 12,
+                  marginBottom: isCompact ? 8 : 12,
                   borderWidth: 1,
                   borderColor: stockColor,
                 }}>
                   <Text style={{
-                    fontSize: 11,
+                    fontSize: isCompact ? 9 : 11,
                     color: stockColor,
                     fontWeight: '700',
                     textTransform: 'uppercase',
@@ -287,20 +329,21 @@ export default function StockBoxScreen() {
                   onPress={() => handleEditStock(product)}
                   style={{
                     backgroundColor: colors.info,
-                    paddingVertical: 10,
-                    paddingHorizontal: 16,
+                    paddingVertical: isCompact ? 8 : 10,
+                    paddingHorizontal: isCompact ? 12 : 16,
                     borderRadius: 10,
                     alignItems: 'center',
                     ...shadows.sm,
                   }}
                 >
-                  <Text style={{ color: 'white', fontWeight: '600', fontSize: 13 }}>
+                  <Text style={{ color: 'white', fontWeight: '600', fontSize: isCompact ? 11 : 13 }}>
                     ✏️ Modifier Stock
                   </Text>
                 </TouchableOpacity>
               </TouchableOpacity>
             )
           })}
+        </View>
         </View>
       </ScrollView>
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { View, Text, ScrollView, TextInput, TouchableOpacity, Alert, KeyboardAvoidingView, Platform } from 'react-native'
 import { Picker } from '@react-native-picker/picker'
 import { useAuth } from '../../hooks/useAuth'
@@ -27,6 +27,15 @@ export default function PurchasesScreen() {
   // NEW: Box unit support
   const [boxQuantity, setBoxQuantity] = useState('')
   const [showBoxQuantity, setShowBoxQuantity] = useState(false)
+
+  const supplierSuggestions = useMemo(() => {
+    if (!suppliers.length) return []
+    const query = fournisseur.trim().toLowerCase()
+    const matches = query.length === 0
+      ? suppliers
+      : suppliers.filter(s => s.toLowerCase().includes(query) && s.toLowerCase() !== query)
+    return matches.slice(0, 6)
+  }, [fournisseur, suppliers])
 
   useEffect(() => {
     if (user) {
@@ -246,11 +255,25 @@ export default function PurchasesScreen() {
                     value={fournisseur}
                     onChangeText={setFournisseur}
                     placeholderTextColor={colors.textLight}
+                    autoCapitalize="words"
                   />
-                  {suppliers.length > 0 && (
-                    <Text style={[typography.small, { color: colors.textSecondary, marginTop: -8, marginBottom: 8 }]}>
-                      💡 Suggestions: {suppliers.slice(0, 3).join(', ')}
-                    </Text>
+                  {supplierSuggestions.length > 0 && (
+                    <View style={styles.suggestionContainer}>
+                      <Text style={[typography.small, { color: colors.textSecondary, marginBottom: 6 }]}>
+                        Suggestions
+                      </Text>
+                      <View style={styles.suggestionRow}>
+                        {supplierSuggestions.map((supplier) => (
+                          <TouchableOpacity
+                            key={supplier}
+                            onPress={() => setFournisseur(supplier)}
+                            style={styles.suggestionChip}
+                          >
+                            <Text style={styles.suggestionText}>{supplier}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                    </View>
                   )}
                 </View>
                 
@@ -500,4 +523,29 @@ export default function PurchasesScreen() {
       </View>
     </KeyboardAvoidingView>
   )
+}
+
+const styles = {
+  suggestionContainer: {
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  suggestionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap' as const,
+  },
+  suggestionChip: {
+    backgroundColor: colors.backgroundAlt,
+    borderRadius: 12,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    marginRight: 8,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+  },
+  suggestionText: {
+    fontSize: 12,
+    color: colors.text,
+  },
 }
