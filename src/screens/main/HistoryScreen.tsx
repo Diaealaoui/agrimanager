@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react'
-import { View, Text, ScrollView, TextInput, TouchableOpacity, Alert, ActivityIndicator } from 'react-native'
+import React, { useEffect, useState } from 'react'
+import { View, Text, ScrollView, TextInput, TouchableOpacity, ActivityIndicator, Alert } from 'react-native'
 import { Picker } from '@react-native-picker/picker'
 import * as FileSystem from 'expo-file-system'
 import * as Sharing from 'expo-sharing'
@@ -8,75 +8,84 @@ import Database from '../../lib/database'
 import { globalStyles, typography, colors, shadows } from '../../utils/styles'
 import { formatCurrency, formatDate } from '../../utils/helpers'
 
-export default function PurchaseDetailScreen() {
+type HistoryScreenProps = {
+  route?: { params?: { parcelle?: string; produit?: string } }
+}
+
+export default function HistoryScreen({ route }: HistoryScreenProps) {
   const { user } = useAuth()
   const [loading, setLoading] = useState(true)
-  const [achats, setAchats] = useState<any[]>([])
+  const [treatments, setTreatments] = useState<any[]>([])
   const [filters, setFilters] = useState({
     startDate: '',
     endDate: '',
-    supplier: 'Tous',
-    activeIngredient: 'Tous',
-    search: '',
+    parcelle: 'Tous',
+    produit: 'Tous',
   })
-  const [suppliers, setSuppliers] = useState<string[]>([])
-  const [activeIngredients, setActiveIngredients] = useState<string[]>([])
+  const [parcelles, setParcelles] = useState<string[]>([])
+  const [produits, setProduits] = useState<string[]>([])
   const [exporting, setExporting] = useState(false)
 
   useEffect(() => {
-    if (user) {
-      loadData()
-    }
+    if (!user) return
+    loadFiltersData()
   }, [user])
 
-  const loadData = async () => {
+  useEffect(() => {
+    const prefilledParcelle = route?.params?.parcelle
+    const prefilledProduit = route?.params?.produit
+    if (prefilledParcelle || prefilledProduit) {
+      setFilters(prev => ({
+        ...prev,
+        parcelle: prefilledParcelle ?? prev.parcelle,
+        produit: prefilledProduit ?? prev.produit,
+      }))
+    }
+  }, [route?.params?.parcelle, route?.params?.produit])
+
+  useEffect(() => {
     if (!user) return
-    
+    loadTreatments()
+  }, [filters, user])
+
+  const loadFiltersData = async () => {
+    if (!user) return
+    try {
+      const [parcellesRes, produitsRes] = await Promise.all([
+        Database.obtenirParcelles(user.id),
+        Database.obtenirProduits(user.id),
+      ])
+      const parcelleNames = parcellesRes.map(p => p.nom).filter(Boolean)
+      const produitNames = produitsRes.map(p => p.nom).filter(Boolean)
+      setParcelles(['Tous', ...parcelleNames])
+      setProduits(['Tous', ...produitNames])
+    } catch (error) {
+      console.error('Error loading filters:', error)
+    }
+  }
+
+  const loadTreatments = async () => {
+    if (!user) return
     setLoading(true)
     try {
-      const [suppliersRes, activeIngredientsRes] = await Promise.all([
-        Database.getSuppliers(user.id),
-        Database.getActiveIngredients(user.id),
-      ])
-      
-      setSuppliers(['Tous', ...suppliersRes])
-      setActiveIngredients(['Tous', ...activeIngredientsRes])
-      
-      await loadAchats()
+      const data = await Database.getTraitementsWithFilters(
+        user.id,
+        filters.startDate || undefined,
+        filters.endDate || undefined,
+        filters.parcelle !== 'Tous' ? filters.parcelle : undefined,
+        filters.produit !== 'Tous' ? filters.produit : undefined
+      )
+      setTreatments(data)
     } catch (error) {
-      console.error('Error loading data:', error)
+      console.error('Error loading treatments:', error)
     } finally {
       setLoading(false)
     }
   }
 
-  const loadAchats = async () => {
-    if (!user) return
-    
-    try {
-      const data = await Database.getAchatsWithFilters(
-        user.id,
-        filters.startDate || undefined,
-        filters.endDate || undefined,
-        filters.supplier !== 'Tous' ? filters.supplier : undefined,
-        filters.search || undefined,
-        filters.activeIngredient !== 'Tous' ? filters.activeIngredient : undefined
-      )
-      
-      setAchats(data)
-    } catch (error) {
-      console.error('Error loading purchases:', error)
-      Alert.alert('Erreur', 'Impossible de charger les achats')
-    }
-  }
-
-  useEffect(() => {
-    if (user) loadAchats()
-  }, [filters])
-
   const exportToCSV = async () => {
-    if (achats.length === 0) {
-      Alert.alert('Aucune donnée', 'Il n\'y a pas de données à exporter')
+    if (treatments.length === 0) {
+      Alert.alert('Aucune donnee', 'Il n\'y a pas de traitements a exporter')
       return
     }
 
@@ -84,40 +93,32 @@ export default function PurchaseDetailScreen() {
     try {
       const headers = [
         'Date',
+        'Parcelle',
         'Produit',
-        'Type',
-        'Matière Active',
-        'Fournisseur',
-        'Quantité',
-        'Unité',
-        'Prix HT',
-        'TVA %',
-        'Prix TTC',
-        'Total TTC'
+        'Matiere Active',
+        'Quantite',
+        'Unite',
+        'Cout Estime'
       ]
-      
+
       const csvRows = [
         headers.join(','),
-        ...achats.map(a => {
-          const prod = a.produits || {}
+        ...treatments.map(t => {
+          const prod = t.produits || {}
           return [
-            formatDate(a.date_commande),
-            `"${a.nom || ''}"`,
-            `"${prod.type_produit || ''}"`,
+            formatDate(t.date_traitement || ''),
+            `"${t.parcelle || ''}"`,
+            `"${prod.nom || ''}"`,
             `"${prod.matiere_active || ''}"`,
-            `"${a.fournisseur || ''}"`,
-            a.quantite_recue || 0,
-            a.unite_achat || '',
-            (a.prix_unitaire_ht || 0).toFixed(2),
-            a.taux_tva || 0,
-            (a.prix_unitaire_ttc || 0).toFixed(2),
-            (a.montant_ttc || 0).toFixed(2)
+            t.quantite_utilisee || 0,
+            `"${prod.unite_reference || ''}"`,
+            (t.cout_estime || 0).toFixed(2)
           ].join(',')
         })
       ]
 
       const csvContent = csvRows.join('\n')
-      const fileName = `Achats_${new Date().toISOString().split('T')[0]}.csv`
+      const fileName = `Traitements_${new Date().toISOString().split('T')[0]}.csv`
       const fileUri = `${FileSystem.documentDirectory}${fileName}`
 
       await FileSystem.writeAsStringAsync(fileUri, csvContent, {
@@ -126,42 +127,37 @@ export default function PurchaseDetailScreen() {
 
       await Sharing.shareAsync(fileUri, {
         mimeType: 'text/csv',
-        dialogTitle: 'Télécharger le registre des achats',
+        dialogTitle: 'Telecharger l\'historique des traitements',
         UTI: 'public.comma-separated-values-text',
       })
-      
-      Alert.alert('Succès', 'Fichier CSV exporté avec succès')
+
+      Alert.alert('Succes', 'Fichier CSV exporte avec succes')
     } catch (error) {
       console.error('Error exporting CSV:', error)
-      Alert.alert('Erreur', 'Impossible d\'exporter les données')
+      Alert.alert('Erreur', 'Impossible d\'exporter les donnees')
     } finally {
       setExporting(false)
     }
   }
 
   const exportToExcel = async () => {
-    if (achats.length === 0) {
-      Alert.alert('Aucune donnée', 'Il n\'y a pas de données à exporter')
+    if (treatments.length === 0) {
+      Alert.alert('Aucune donnee', 'Il n\'y a pas de traitements a exporter')
       return
     }
 
     setExporting(true)
     try {
-      // Create HTML table for Excel
       const headers = [
         'Date',
+        'Parcelle',
         'Produit',
-        'Type',
-        'Matière Active',
-        'Fournisseur',
-        'Quantité',
-        'Unité',
-        'Prix HT',
-        'TVA %',
-        'Prix TTC',
-        'Total TTC'
+        'Matiere Active',
+        'Quantite',
+        'Unite',
+        'Cout Estime'
       ]
-      
+
       let htmlTable = `
         <html>
         <head>
@@ -176,7 +172,7 @@ export default function PurchaseDetailScreen() {
           </style>
         </head>
         <body>
-          <div class="header-title">📋 Registre des Achats - ${new Date().toLocaleDateString('fr-FR')}</div>
+          <div class="header-title">Historique des Traitements - ${new Date().toLocaleDateString('fr-FR')}</div>
           <table>
             <thead>
               <tr>
@@ -185,44 +181,39 @@ export default function PurchaseDetailScreen() {
             </thead>
             <tbody>
       `
-      
-      let totalTTC = 0
-      achats.forEach(a => {
-        const prod = a.produits || {}
-        totalTTC += a.montant_ttc || 0
-        
+
+      let totalCost = 0
+      treatments.forEach(t => {
+        const prod = t.produits || {}
+        totalCost += t.cout_estime || 0
         htmlTable += `
           <tr>
-            <td>${formatDate(a.date_commande)}</td>
-            <td>${a.nom || ''}</td>
-            <td>${prod.type_produit || ''}</td>
+            <td>${formatDate(t.date_traitement || '')}</td>
+            <td>${t.parcelle || ''}</td>
+            <td>${prod.nom || ''}</td>
             <td>${prod.matiere_active || ''}</td>
-            <td>${a.fournisseur || ''}</td>
-            <td>${a.quantite_recue || 0}</td>
-            <td>${a.unite_achat || ''}</td>
-            <td>${(a.prix_unitaire_ht || 0).toFixed(2)} MAD</td>
-            <td>${a.taux_tva || 0}%</td>
-            <td>${(a.prix_unitaire_ttc || 0).toFixed(2)} MAD</td>
-            <td>${formatCurrency(a.montant_ttc || 0)}</td>
+            <td>${t.quantite_utilisee || 0}</td>
+            <td>${prod.unite_reference || ''}</td>
+            <td>${formatCurrency(t.cout_estime || 0)}</td>
           </tr>
         `
       })
-      
+
       htmlTable += `
               <tr class="total-row">
-                <td colspan="10" style="text-align: right; padding-right: 20px;">TOTAL GÉNÉRAL</td>
-                <td>${formatCurrency(totalTTC)}</td>
+                <td colspan="6" style="text-align: right; padding-right: 20px;">TOTAL</td>
+                <td>${formatCurrency(totalCost)}</td>
               </tr>
             </tbody>
           </table>
           <div style="margin-top: 30px; color: #64748b; font-size: 12px;">
-            Document généré le ${new Date().toLocaleString('fr-FR')} par AgriManager Pro
+            Document genere le ${new Date().toLocaleString('fr-FR')} par AgriManager Pro
           </div>
         </body>
         </html>
       `
 
-      const fileName = `Achats_${new Date().toISOString().split('T')[0]}.xls`
+      const fileName = `Traitements_${new Date().toISOString().split('T')[0]}.xls`
       const fileUri = `${FileSystem.documentDirectory}${fileName}`
 
       await FileSystem.writeAsStringAsync(fileUri, htmlTable, {
@@ -231,20 +222,20 @@ export default function PurchaseDetailScreen() {
 
       await Sharing.shareAsync(fileUri, {
         mimeType: 'application/vnd.ms-excel',
-        dialogTitle: 'Télécharger le registre des achats',
+        dialogTitle: 'Telecharger l\'historique des traitements',
         UTI: 'com.microsoft.excel.xls',
       })
-      
-      Alert.alert('Succès', 'Fichier Excel exporté avec succès')
+
+      Alert.alert('Succes', 'Fichier Excel exporte avec succes')
     } catch (error) {
       console.error('Error exporting Excel:', error)
-      Alert.alert('Erreur', 'Impossible d\'exporter les données')
+      Alert.alert('Erreur', 'Impossible d\'exporter les donnees')
     } finally {
       setExporting(false)
     }
   }
 
-  const totalValue = achats.reduce((sum, a) => sum + (a.montant_ttc || 0), 0)
+  const totalCost = treatments.reduce((sum, t) => sum + (t.cout_estime || 0), 0)
 
   if (loading) {
     return (
@@ -256,7 +247,6 @@ export default function PurchaseDetailScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
-      {/* Luxurious Header */}
       <View style={{
         backgroundColor: colors.primary,
         padding: 24,
@@ -266,13 +256,13 @@ export default function PurchaseDetailScreen() {
         ...shadows.xl,
       }}>
         <Text style={[typography.h1, { color: colors.gold, marginBottom: 4 }]}>
-          📋 Détail des Achats
+          Historique des Traitements
         </Text>
         <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 14 }}>
-          Registre complet de vos acquisitions
+          Suivi detaille par parcelle et produit
         </Text>
       </View>
-      
+
       <ScrollView style={{ flex: 1, padding: 20 }}>
         {/* Filters Card */}
         <View style={[globalStyles.cardLuxury, { marginBottom: 20 }]}>
@@ -280,22 +270,11 @@ export default function PurchaseDetailScreen() {
             <Text style={{ fontSize: 24, marginRight: 8 }}>🔍</Text>
             <Text style={[typography.h3, { color: colors.primary }]}>Filtres</Text>
           </View>
-          
-          <Text style={[typography.caption, { marginBottom: 8, color: colors.text, fontWeight: '600' }]}>
-            Recherche
-          </Text>
-          <TextInput
-            style={[globalStyles.input, { marginBottom: 16 }]}
-            placeholder="Rechercher un produit..."
-            value={filters.search}
-            onChangeText={(text) => setFilters({ ...filters, search: text })}
-            placeholderTextColor={colors.textLight}
-          />
-          
+
           <View style={{ flexDirection: 'row', marginBottom: 16 }}>
             <View style={{ flex: 1, marginRight: 8 }}>
               <Text style={[typography.caption, { marginBottom: 8, color: colors.text, fontWeight: '600' }]}>
-                Date Début
+                Date Debut
               </Text>
               <TextInput
                 style={globalStyles.input}
@@ -318,44 +297,44 @@ export default function PurchaseDetailScreen() {
               />
             </View>
           </View>
-          
+
           <Text style={[typography.caption, { marginBottom: 8, color: colors.text, fontWeight: '600' }]}>
-            Fournisseur
+            Parcelle
           </Text>
-          <View style={{ 
-            backgroundColor: colors.backgroundAlt, 
-            borderRadius: 12, 
-            borderWidth: 2, 
+          <View style={{
+            backgroundColor: colors.backgroundAlt,
+            borderRadius: 12,
+            borderWidth: 2,
             borderColor: colors.border,
             marginBottom: 16,
           }}>
             <Picker
-              selectedValue={filters.supplier}
-              onValueChange={(value) => setFilters({ ...filters, supplier: value })}
+              selectedValue={filters.parcelle}
+              onValueChange={(value) => setFilters({ ...filters, parcelle: value })}
               style={{ color: colors.text }}
             >
-              {suppliers.map(s => (
-                <Picker.Item key={s} label={s} value={s} />
+              {parcelles.map(p => (
+                <Picker.Item key={p} label={p} value={p} />
               ))}
             </Picker>
           </View>
-          
+
           <Text style={[typography.caption, { marginBottom: 8, color: colors.text, fontWeight: '600' }]}>
-            Matière Active
+            Produit
           </Text>
-          <View style={{ 
-            backgroundColor: colors.backgroundAlt, 
-            borderRadius: 12, 
-            borderWidth: 2, 
+          <View style={{
+            backgroundColor: colors.backgroundAlt,
+            borderRadius: 12,
+            borderWidth: 2,
             borderColor: colors.border,
           }}>
             <Picker
-              selectedValue={filters.activeIngredient}
-              onValueChange={(value) => setFilters({ ...filters, activeIngredient: value })}
+              selectedValue={filters.produit}
+              onValueChange={(value) => setFilters({ ...filters, produit: value })}
               style={{ color: colors.text }}
             >
-              {activeIngredients.map(a => (
-                <Picker.Item key={a} label={a} value={a} />
+              {produits.map(p => (
+                <Picker.Item key={p} label={p} value={p} />
               ))}
             </Picker>
           </View>
@@ -366,82 +345,76 @@ export default function PurchaseDetailScreen() {
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
             <View>
               <Text style={[typography.caption, { color: colors.text, marginBottom: 4 }]}>
-                Total des Achats
+                Cout Total des Traitements
               </Text>
               <Text style={[typography.h2, { color: colors.primary, fontWeight: '700' }]}>
-                {formatCurrency(totalValue)}
+                {formatCurrency(totalCost)}
               </Text>
               <Text style={[typography.caption, { color: colors.textSecondary, marginTop: 4 }]}>
-                {achats.length} achat{achats.length !== 1 ? 's' : ''}
+                {treatments.length} traitement{treatments.length !== 1 ? 's' : ''}
               </Text>
             </View>
-            <Text style={{ fontSize: 48 }}>💰</Text>
+            <Text style={{ fontSize: 48 }}>💧</Text>
           </View>
         </View>
 
         {/* Export Buttons */}
         <View style={{ flexDirection: 'row', marginBottom: 20 }}>
           <TouchableOpacity
-            style={[globalStyles.button, { 
+            style={[globalStyles.button, {
               flex: 1,
               marginRight: 8,
-              backgroundColor: exporting ? colors.textLight : colors.success 
+              backgroundColor: exporting ? colors.textLight : colors.success
             }]}
             onPress={exportToCSV}
-            disabled={exporting || achats.length === 0}
+            disabled={exporting || treatments.length === 0}
           >
             <Text style={globalStyles.buttonText}>
-              {exporting ? 'Export...' : '📄 Export CSV'}
+              {exporting ? 'Export...' : 'Export CSV'}
             </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[globalStyles.buttonGold, { 
+            style={[globalStyles.buttonGold, {
               flex: 1,
               marginLeft: 8,
-              opacity: (exporting || achats.length === 0) ? 0.5 : 1
+              opacity: (exporting || treatments.length === 0) ? 0.5 : 1
             }]}
             onPress={exportToExcel}
-            disabled={exporting || achats.length === 0}
+            disabled={exporting || treatments.length === 0}
           >
             <Text style={globalStyles.buttonText}>
-              {exporting ? 'Export...' : '📊 Export Excel'}
+              {exporting ? 'Export...' : 'Export Excel'}
             </Text>
           </TouchableOpacity>
         </View>
 
         {/* Detailed Table */}
-        {achats.length > 0 ? (
+        {treatments.length > 0 ? (
           <View style={[globalStyles.card, { padding: 0, overflow: 'hidden' }]}>
             <ScrollView horizontal showsHorizontalScrollIndicator={true}>
               <View>
-                {/* Table Header */}
-                <View style={{ 
-                  flexDirection: 'row', 
+                <View style={{
+                  flexDirection: 'row',
                   backgroundColor: colors.primary,
                   borderTopLeftRadius: 12,
                   borderTopRightRadius: 12,
                 }}>
                   <Text style={[styles.tableHeader, { width: 110 }]}>Date</Text>
+                  <Text style={[styles.tableHeader, { width: 140 }]}>Parcelle</Text>
                   <Text style={[styles.tableHeader, { width: 160 }]}>Produit</Text>
-                  <Text style={[styles.tableHeader, { width: 120 }]}>Type</Text>
-                  <Text style={[styles.tableHeader, { width: 140 }]}>Mat. Active</Text>
-                  <Text style={[styles.tableHeader, { width: 140 }]}>Fournisseur</Text>
-                  <Text style={[styles.tableHeader, { width: 80 }]}>Qté</Text>
-                  <Text style={[styles.tableHeader, { width: 70 }]}>Unité</Text>
-                  <Text style={[styles.tableHeader, { width: 90 }]}>Prix HT</Text>
-                  <Text style={[styles.tableHeader, { width: 70 }]}>TVA</Text>
-                  <Text style={[styles.tableHeader, { width: 90 }]}>Prix TTC</Text>
-                  <Text style={[styles.tableHeader, { width: 110 }]}>Total TTC</Text>
+                  <Text style={[styles.tableHeader, { width: 150 }]}>Mat. Active</Text>
+                  <Text style={[styles.tableHeader, { width: 80 }]}>Qte</Text>
+                  <Text style={[styles.tableHeader, { width: 70 }]}>Unite</Text>
+                  <Text style={[styles.tableHeader, { width: 110 }]}>Cout</Text>
                 </View>
-                
-                {/* Table Rows */}
-                {achats.map((a, index) => {
-                  const prod = a.produits || {}
+
+                {treatments.map((t, index) => {
+                  const prod = t.produits || {}
                   return (
-                    <View 
-                      key={a.id || index} 
-                      style={{ 
+                    <View
+                      key={t.id || index}
+                      style={{
                         flexDirection: 'row',
                         borderBottomWidth: 1,
                         borderBottomColor: colors.borderLight,
@@ -449,43 +422,30 @@ export default function PurchaseDetailScreen() {
                       }}
                     >
                       <Text style={[styles.tableCell, { width: 110 }]}>
-                        {formatDate(a.date_commande)}
+                        {formatDate(t.date_traitement || '')}
                       </Text>
-                      <Text style={[styles.tableCell, { width: 160, fontWeight: '600' }]}>
-                        {a.nom}
+                      <Text style={[styles.tableCell, { width: 140, fontWeight: '600' }]}>
+                        {t.parcelle || '-'}
                       </Text>
-                      <Text style={[styles.tableCell, { width: 120 }]}>
-                        {prod.type_produit || '-'}
+                      <Text style={[styles.tableCell, { width: 160 }]}>
+                        {prod.nom || '-'}
                       </Text>
-                      <Text style={[styles.tableCell, { width: 140, fontStyle: 'italic' }]}>
+                      <Text style={[styles.tableCell, { width: 150, fontStyle: 'italic' }]}>
                         {prod.matiere_active || '-'}
                       </Text>
-                      <Text style={[styles.tableCell, { width: 140 }]}>
-                        {a.fournisseur}
-                      </Text>
                       <Text style={[styles.tableCell, { width: 80, textAlign: 'right', fontWeight: '600' }]}>
-                        {a.quantite_recue}
+                        {t.quantite_utilisee || 0}
                       </Text>
                       <Text style={[styles.tableCell, { width: 70 }]}>
-                        {a.unite_achat}
-                      </Text>
-                      <Text style={[styles.tableCell, { width: 90, textAlign: 'right' }]}>
-                        {(a.prix_unitaire_ht || 0).toFixed(2)}
-                      </Text>
-                      <Text style={[styles.tableCell, { width: 70, textAlign: 'center' }]}>
-                        {a.taux_tva}%
-                      </Text>
-                      <Text style={[styles.tableCell, { width: 90, textAlign: 'right' }]}>
-                        {(a.prix_unitaire_ttc || 0).toFixed(2)}
+                        {prod.unite_reference || '-'}
                       </Text>
                       <Text style={[styles.tableCell, { width: 110, color: colors.gold, fontWeight: '700', textAlign: 'right' }]}>
-                        {formatCurrency(a.montant_ttc || 0)}
+                        {formatCurrency(t.cout_estime || 0)}
                       </Text>
                     </View>
                   )
                 })}
 
-                {/* Total Row */}
                 <View style={{
                   flexDirection: 'row',
                   backgroundColor: colors.goldLight,
@@ -494,23 +454,23 @@ export default function PurchaseDetailScreen() {
                   borderTopWidth: 3,
                   borderTopColor: colors.gold,
                 }}>
-                  <Text style={[styles.tableCell, { 
-                    width: 1060, 
-                    fontWeight: '700', 
+                  <Text style={[styles.tableCell, {
+                    width: 710,
+                    fontWeight: '700',
                     color: colors.primary,
                     textAlign: 'right',
                     paddingRight: 20
                   }]}>
-                    TOTAL GÉNÉRAL
+                    TOTAL
                   </Text>
-                  <Text style={[styles.tableCell, { 
-                    width: 110, 
-                    color: colors.primary, 
+                  <Text style={[styles.tableCell, {
+                    width: 110,
+                    color: colors.primary,
                     fontWeight: '700',
                     fontSize: 16,
-                    textAlign: 'right' 
+                    textAlign: 'right'
                   }]}>
-                    {formatCurrency(totalValue)}
+                    {formatCurrency(totalCost)}
                   </Text>
                 </View>
               </View>
@@ -518,12 +478,12 @@ export default function PurchaseDetailScreen() {
           </View>
         ) : (
           <View style={[globalStyles.card, { alignItems: 'center', padding: 48 }]}>
-            <Text style={{ fontSize: 64, marginBottom: 20 }}>📭</Text>
+            <Text style={{ fontSize: 64, marginBottom: 20 }}>🚜</Text>
             <Text style={[typography.h3, { textAlign: 'center', marginBottom: 8, color: colors.text }]}>
-              Aucun achat trouvé
+              Aucun traitement trouve
             </Text>
             <Text style={[typography.caption, { textAlign: 'center', color: colors.textSecondary }]}>
-              Ajustez vos filtres de recherche ou ajoutez de nouveaux achats
+              Ajustez vos filtres ou enregistrez un traitement
             </Text>
           </View>
         )}

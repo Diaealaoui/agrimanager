@@ -13,7 +13,7 @@ import {
   Platform,
   TouchableWithoutFeedback,
   Keyboard,
-  Dimensions
+  useWindowDimensions
 } from 'react-native'
 import { useNavigation } from '@react-navigation/native'
 import { useAuth } from '../../hooks/useAuth'
@@ -21,8 +21,7 @@ import Database from '../../lib/database'
 import { globalStyles, typography, colors, shadows } from '../../utils/styles'
 import { formatCurrency } from '../../utils/helpers'
 import { Feather } from '@expo/vector-icons'
-
-const { width } = Dimensions.get('window')
+import Sidebar from '../../components/layout/Sidebar'
 
 interface DashboardStats {
   totalSpent: number
@@ -81,10 +80,13 @@ interface SearchResult {
 export default function DashboardScreen() {
   const { user } = useAuth()
   const navigation = useNavigation()
+  const { width } = useWindowDimensions()
+  const isSmallScreen = width < 380
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const currentYear = new Date().getFullYear()
+  const monthLabels = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Aoû', 'Sep', 'Oct', 'Nov', 'Déc']
   
   const [selectedYear, setSelectedYear] = useState(currentYear)
   const [searchQuery, setSearchQuery] = useState('')
@@ -93,6 +95,7 @@ export default function DashboardScreen() {
   const [selectedFilter, setSelectedFilter] = useState<'all' | 'product' | 'supplier' | 'ingredient'>('all')
   const [selectedMetric, setSelectedMetric] = useState<'spending' | 'orders' | 'avg'>('spending')
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null)
+  const [sidebarVisible, setSidebarVisible] = useState(false)
 
   const [selectedItemDetails, setSelectedItemDetails] = useState<any>(null)
   const [isDetailModalVisible, setIsDetailModalVisible] = useState(false)
@@ -231,10 +234,19 @@ export default function DashboardScreen() {
     return { value: growth, isPositive: growth > 0, previousYearTotal }
   }, [stats])
 
-  const maxMonthlyAmount = useMemo(() => {
-    if (!stats?.monthlyData) return 0
-    return Math.max(...stats.monthlyData.map(m => m.amount))
-  }, [stats])
+  const chartValues = useMemo(() => {
+    const data = stats?.monthlyData || []
+    return data.map(month => {
+      if (selectedMetric === 'orders') return month.orders || 0
+      if (selectedMetric === 'avg') return month.orders ? month.amount / month.orders : 0
+      return month.amount || 0
+    })
+  }, [stats, selectedMetric])
+
+  const maxChartValue = useMemo(() => {
+    if (chartValues.length === 0) return 0
+    return Math.max(...chartValues)
+  }, [chartValues])
 
   if (loading && !refreshing) {
     return (
@@ -254,6 +266,15 @@ export default function DashboardScreen() {
   const monthlyData = stats?.monthlyData || []
 
   const selectedMonthData = selectedMonth ? monthlyData.find(m => m.month === selectedMonth) : null
+  const selectedMonthIndex = selectedMonth ? monthlyData.findIndex(m => m.month === selectedMonth) : -1
+  const selectedMonthLabel = selectedMonthData
+    ? `${monthLabels[parseInt(selectedMonthData.month.split('-')[1], 10) - 1] || selectedMonthData.month.split('-')[1]} ${selectedYear}`
+    : ''
+  const formatMetricValue = (value: number) => {
+    if (selectedMetric === 'orders') return `${Math.round(value)}`
+    return formatCurrency(value)
+  }
+  const selectedMetricValue = selectedMonthIndex >= 0 ? chartValues[selectedMonthIndex] : null
 
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
@@ -261,42 +282,58 @@ export default function DashboardScreen() {
         <View style={{ flex: 1, backgroundColor: colors.background }}>
           
           {/* Header with Search */}
-          <View style={{ backgroundColor: colors.primary, padding: 24, paddingTop: 60, borderBottomLeftRadius: 30, borderBottomRightRadius: 30, ...shadows.xl }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-              <View>
-                <Text style={[typography.h1, { color: colors.gold, marginBottom: 4 }]}>Tableau de Bord</Text>
-                <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 14 }}>Analyse financière d'exploitation</Text>
+          <View style={{ backgroundColor: colors.primary, padding: isSmallScreen ? 16 : 24, paddingTop: isSmallScreen ? 48 : 60, borderBottomLeftRadius: isSmallScreen ? 22 : 30, borderBottomRightRadius: isSmallScreen ? 22 : 30, ...shadows.xl }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: isSmallScreen ? 16 : 20 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 12 }}>
+                <TouchableOpacity
+                  onPress={() => setSidebarVisible(true)}
+                  style={{
+                    width: isSmallScreen ? 36 : 40,
+                    height: isSmallScreen ? 36 : 40,
+                    borderRadius: isSmallScreen ? 18 : 20,
+                    backgroundColor: 'rgba(255,255,255,0.15)',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    marginRight: 12,
+                  }}
+                >
+                  <Feather name="menu" size={isSmallScreen ? 18 : 20} color="white" />
+                </TouchableOpacity>
+                <View>
+                  <Text style={[typography.h1, { color: colors.gold, marginBottom: 4, fontSize: isSmallScreen ? 24 : 32 }]}>Tableau de Bord</Text>
+                  <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: isSmallScreen ? 12 : 14 }}>Analyse financière d'exploitation</Text>
+                </View>
               </View>
-              <TouchableOpacity onPress={() => setIsSearching(true)} style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.gold, justifyContent: 'center', alignItems: 'center', ...shadows.md }}>
-                <Feather name="search" size={22} color="white" />
+              <TouchableOpacity onPress={() => setIsSearching(true)} style={{ width: isSmallScreen ? 40 : 44, height: isSmallScreen ? 40 : 44, borderRadius: isSmallScreen ? 20 : 22, backgroundColor: colors.gold, justifyContent: 'center', alignItems: 'center', ...shadows.md }}>
+                <Feather name="search" size={isSmallScreen ? 20 : 22} color="white" />
               </TouchableOpacity>
             </View>
 
-            <TouchableOpacity onPress={() => setIsSearching(true)} style={{ backgroundColor: 'white', borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', ...shadows.sm }}>
+            <TouchableOpacity onPress={() => setIsSearching(true)} style={{ backgroundColor: 'white', borderRadius: 12, paddingHorizontal: 16, paddingVertical: isSmallScreen ? 10 : 12, flexDirection: 'row', alignItems: 'center', ...shadows.sm }}>
               <Feather name="search" size={20} color={colors.textSecondary} />
-              <Text style={{ marginLeft: 12, color: colors.textSecondary, fontSize: 16, flex: 1 }}>{searchQuery || "Rechercher produits, matières actives..."}</Text>
+              <Text style={{ marginLeft: 12, color: colors.textSecondary, fontSize: isSmallScreen ? 14 : 16, flex: 1 }} numberOfLines={1}>{searchQuery || "Rechercher produits, matières actives..."}</Text>
             </TouchableOpacity>
 
-            <View style={{ flexDirection: 'row', marginTop: 20 }}>
+            <View style={{ flexDirection: 'row', marginTop: isSmallScreen ? 16 : 20 }}>
               <View style={{ flex: 1, alignItems: 'center' }}>
-                <Text style={{ color: colors.gold, fontSize: 20, fontWeight: 'bold' }}>{formatCurrency(totalSpent)}</Text>
-                <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 12 }}>Dépenses</Text>
+                <Text style={{ color: colors.gold, fontSize: isSmallScreen ? 16 : 20, fontWeight: 'bold' }}>{formatCurrency(totalSpent)}</Text>
+                <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: isSmallScreen ? 11 : 12 }}>Dépenses</Text>
               </View>
               <View style={{ flex: 1, alignItems: 'center' }}>
-                <Text style={{ color: colors.gold, fontSize: 20, fontWeight: 'bold' }}>{totalOrders}</Text>
-                <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 12 }}>Commandes</Text>
+                <Text style={{ color: colors.gold, fontSize: isSmallScreen ? 16 : 20, fontWeight: 'bold' }}>{totalOrders}</Text>
+                <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: isSmallScreen ? 11 : 12 }}>Commandes</Text>
               </View>
               <View style={{ flex: 1, alignItems: 'center' }}>
-                <Text style={{ color: colors.gold, fontSize: 20, fontWeight: 'bold' }}>{formatCurrency(monthlyAvg)}</Text>
-                <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 12 }}>Moyenne/mois</Text>
+                <Text style={{ color: colors.gold, fontSize: isSmallScreen ? 16 : 20, fontWeight: 'bold' }}>{formatCurrency(monthlyAvg)}</Text>
+                <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: isSmallScreen ? 11 : 12 }}>Moyenne/mois</Text>
               </View>
             </View>
           </View>
 
           {/* Search Modal */}
           <Modal visible={isSearching} animationType="slide" transparent={true}>
-            <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', paddingTop: 80 }}>
-              <View style={{ backgroundColor: colors.background, marginHorizontal: 20, borderRadius: 20, maxHeight: '80%', ...shadows.xl }}>
+            <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', paddingTop: isSmallScreen ? 60 : 80 }}>
+              <View style={{ backgroundColor: colors.background, marginHorizontal: isSmallScreen ? 12 : 20, borderRadius: 20, maxHeight: '80%', ...shadows.xl }}>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: colors.border }}>
                   <Text style={[typography.h3, { color: colors.primary }]}>Recherche</Text>
                   <TouchableOpacity onPress={() => setIsSearching(false)}><Feather name="x" size={24} color={colors.textSecondary} /></TouchableOpacity>
@@ -358,7 +395,7 @@ export default function DashboardScreen() {
             </View>
           </Modal>
 
-          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 20 }} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.gold]} />}>
+          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: isSmallScreen ? 16 : 20, paddingBottom: 32 }} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.gold]} />}>
             
             {/* Period Selection */}
             <View style={[globalStyles.card, { marginBottom: 20, padding: 16 }]}>
@@ -380,13 +417,13 @@ export default function DashboardScreen() {
             </View>
 
             {/* Metrics */}
-            <View style={{ flexDirection: 'row', marginBottom: 20 }}>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginBottom: 20 }}>
                {[
                  { key: 'spending', label: 'Dépenses', icon: 'dollar-sign', value: formatCurrency(totalSpent), color: colors.primary },
                  { key: 'orders', label: 'Commandes', icon: 'shopping-cart', value: totalOrders, color: colors.secondary },
                  { key: 'avg', label: 'Moyenne', icon: 'trending-up', value: formatCurrency(monthlyAvg), color: colors.gold }
                ].map(m => (
-                 <View key={m.key} style={[globalStyles.metricCard, { flex: 1, marginHorizontal: 4 }]}>
+                 <View key={m.key} style={[globalStyles.metricCard, { flex: 0, width: isSmallScreen ? '48%' : '32%', marginHorizontal: 0, marginBottom: 10 }]}>
                     <Text style={[typography.small, { color: colors.textSecondary }]}>{m.label}</Text>
                     <Text style={{ color: m.color, fontWeight: '700', fontSize: 14 }}>{m.value}</Text>
                  </View>
@@ -395,28 +432,104 @@ export default function DashboardScreen() {
 
             {/* Financial Trend Chart */}
             <View style={[globalStyles.card, { marginBottom: 20, padding: 16 }]}>
-              <Text style={[typography.h3, { color: colors.primary, marginBottom: 16 }]}>📈 Évolution des Dépenses</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                <View style={{ flexDirection: 'row', height: 120, alignItems: 'flex-end', paddingBottom: 10 }}>
-                  {monthlyData.map((m, i) => (
-                    <View key={i} style={{ width: 30, marginHorizontal: 5, alignItems: 'center' }}>
-                       <View style={{ height: maxMonthlyAmount > 0 ? (m.amount/maxMonthlyAmount)*80 : 0, width: 15, backgroundColor: colors.primary, borderRadius: 4 }} />
-                       <Text style={{ fontSize: 8, marginTop: 4 }}>{m.month.split('-')[1]}</Text>
-                    </View>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
+                <Text style={[typography.h3, { color: colors.primary, marginBottom: isSmallScreen ? 8 : 0 }]}>📈 Évolution Mensuelle</Text>
+                <View style={{ flexDirection: 'row', backgroundColor: colors.backgroundAlt, borderRadius: 12, padding: 4 }}>
+                  {[
+                    { key: 'spending', label: 'Dépenses' },
+                    { key: 'orders', label: 'Commandes' },
+                    { key: 'avg', label: 'Moy. cmd' }
+                  ].map(metric => (
+                    <TouchableOpacity
+                      key={metric.key}
+                      onPress={() => setSelectedMetric(metric.key as 'spending' | 'orders' | 'avg')}
+                      style={{
+                        paddingVertical: 6,
+                        paddingHorizontal: 10,
+                        borderRadius: 8,
+                        backgroundColor: selectedMetric === metric.key ? colors.primary : 'transparent'
+                      }}
+                    >
+                      <Text style={{ color: selectedMetric === metric.key ? 'white' : colors.textSecondary, fontSize: 12, fontWeight: '600' }}>
+                        {metric.label}
+                      </Text>
+                    </TouchableOpacity>
                   ))}
                 </View>
+              </View>
+
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                <View style={{ flexDirection: 'row', height: 150, alignItems: 'flex-end', paddingBottom: 8 }}>
+                  {monthlyData.map((m, i) => {
+                    const value = chartValues[i] || 0
+                    const barHeight = maxChartValue > 0 ? Math.max(8, (value / maxChartValue) * 110) : 8
+                    const isSelected = selectedMonth === m.month
+                    const monthIndex = parseInt(m.month.split('-')[1], 10) - 1
+                    const label = monthLabels[monthIndex] || m.month.split('-')[1]
+
+                    return (
+                      <TouchableOpacity
+                        key={m.month}
+                        onPress={() => setSelectedMonth(m.month)}
+                        activeOpacity={0.7}
+                        style={{ width: isSmallScreen ? 34 : 40, marginHorizontal: 6, alignItems: 'center' }}
+                      >
+                        <View style={{
+                          height: barHeight,
+                          width: isSmallScreen ? 16 : 18,
+                          borderRadius: 6,
+                          backgroundColor: isSelected ? colors.gold : colors.primary,
+                          opacity: value === 0 ? 0.3 : 1
+                        }} />
+                        <Text style={{ fontSize: 10, marginTop: 6, color: isSelected ? colors.primary : colors.textSecondary }}>{label}</Text>
+                      </TouchableOpacity>
+                    )
+                  })}
+                </View>
               </ScrollView>
+
+              {selectedMonthData ? (
+                <View style={{ marginTop: 12, padding: 12, backgroundColor: colors.backgroundAlt, borderRadius: 12, borderWidth: 1, borderColor: colors.border }}>
+                  <Text style={[typography.caption, { marginBottom: 6 }]}>{selectedMonthLabel}</Text>
+                  <View style={{ flexDirection: isSmallScreen ? 'column' : 'row', justifyContent: 'space-between' }}>
+                    <View style={{ marginBottom: isSmallScreen ? 8 : 0 }}>
+                      <Text style={typography.small}>Dépenses</Text>
+                      <Text style={[typography.h4, { color: colors.primary }]}>{formatCurrency(selectedMonthData.amount)}</Text>
+                    </View>
+                    <View style={{ alignItems: isSmallScreen ? 'flex-start' : 'flex-end' }}>
+                      <Text style={typography.small}>Commandes</Text>
+                      <Text style={[typography.h4, { color: colors.secondary }]}>{selectedMonthData.orders}</Text>
+                    </View>
+                  </View>
+                  {selectedMetricValue !== null && (
+                    <View style={{ marginTop: 8, flexDirection: 'row', justifyContent: 'space-between' }}>
+                      <Text style={typography.small}>Indicateur sélectionné</Text>
+                      <Text style={[typography.small, { color: colors.textSecondary }]}>{formatMetricValue(selectedMetricValue)}</Text>
+                    </View>
+                  )}
+                  {selectedMonthData.previousYearAmount !== undefined && selectedMonthData.previousYearAmount > 0 && (
+                    <View style={{ marginTop: 6, flexDirection: 'row', justifyContent: 'space-between' }}>
+                      <Text style={typography.small}>Année précédente</Text>
+                      <Text style={[typography.small, { color: colors.textSecondary }]}>{formatCurrency(selectedMonthData.previousYearAmount)}</Text>
+                    </View>
+                  )}
+                </View>
+              ) : (
+                <Text style={[typography.small, { textAlign: 'center', color: colors.textSecondary, marginTop: 8 }]}>
+                  Appuyez sur un mois pour afficher le détail
+                </Text>
+              )}
             </View>
 
             {/* Top Expenses */}
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20 }}>
-                <View style={[globalStyles.card, { flex: 1, marginRight: 8, padding: 12 }]}>
+            <View style={{ flexDirection: isSmallScreen ? 'column' : 'row', justifyContent: 'space-between', marginBottom: 20 }}>
+                <View style={[globalStyles.card, { flex: 1, marginRight: isSmallScreen ? 0 : 8, marginBottom: isSmallScreen ? 12 : 0, padding: 12 }]}>
                   <Text style={[typography.body, { fontWeight: '600', marginBottom: 8 }]}>Produits Top</Text>
                   {topProducts.slice(0, 3).map((p, i) => (
                     <Text key={i} style={typography.caption} numberOfLines={1}>• {p.name}: {formatCurrency(p.amount)}</Text>
                   ))}
                 </View>
-                <View style={[globalStyles.card, { flex: 1, marginLeft: 8, padding: 12 }]}>
+                <View style={[globalStyles.card, { flex: 1, marginLeft: isSmallScreen ? 0 : 8, padding: 12 }]}>
                   <Text style={[typography.body, { fontWeight: '600', marginBottom: 8 }]}>Fournisseurs Top</Text>
                   {topSuppliers.slice(0, 3).map((s, i) => (
                     <Text key={i} style={typography.caption} numberOfLines={1}>• {s.name}: {formatCurrency(s.amount)}</Text>
@@ -447,18 +560,25 @@ export default function DashboardScreen() {
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
                 <Text style={[typography.h2, { color: colors.primary }]}>🚜 Coût par Parcelle</Text>
                 <TouchableOpacity onPress={() => navigation.navigate('History' as never)}>
-                  <Text style={{ color: colors.primary, fontSize: 12, fontWeight: '600' }}>Voir détails →</Text>
+                  <Text style={{ color: colors.primary, fontSize: 12, fontWeight: '600' }}>Voir l'historique →</Text>
                 </TouchableOpacity>
               </View>
               {parcelStats.length > 0 ? (
                 parcelStats.map((parcel, index) => (
-                  <View key={index} style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 12, borderBottomWidth: index < parcelStats.length - 1 ? 1 : 0, borderBottomColor: colors.borderAlt }}>
-                    <View><Text style={{ fontWeight: '600' }}>{parcel.name}</Text><Text style={typography.small}>{parcel.surface.toFixed(2)} ha</Text></View>
+                  <TouchableOpacity
+                    key={index}
+                    onPress={() => navigation.navigate('History' as never, { parcelle: parcel.name } as any)}
+                    style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 12, borderBottomWidth: index < parcelStats.length - 1 ? 1 : 0, borderBottomColor: colors.borderAlt }}
+                  >
+                    <View>
+                      <Text style={{ fontWeight: '600' }}>{parcel.name}</Text>
+                      <Text style={typography.small}>{parcel.surface.toFixed(2)} ha</Text>
+                    </View>
                     <View style={{ alignItems: 'flex-end' }}>
                        <Text style={{ color: colors.primary, fontWeight: '700' }}>{formatCurrency(parcel.cost)}</Text>
                        <Text style={{ color: colors.gold, fontSize: 11 }}>{formatCurrency(parcel.costPerHa)}/ha</Text>
                     </View>
-                  </View>
+                  </TouchableOpacity>
                 ))
               ) : (
                 <Text style={{ textAlign: 'center', color: colors.textSecondary, padding: 20 }}>Aucune donnée disponible</Text>
@@ -466,6 +586,7 @@ export default function DashboardScreen() {
             </View>
 
           </ScrollView>
+          <Sidebar isVisible={sidebarVisible} onClose={() => setSidebarVisible(false)} />
         </View>
       </TouchableWithoutFeedback>
     </KeyboardAvoidingView>

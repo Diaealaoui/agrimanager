@@ -7,7 +7,12 @@ import { useAuth } from '../../hooks/useAuth'
 import Database from '../../lib/database'
 import { globalStyles, typography, colors, shadows } from '../../utils/styles'
 
-export default function OrderScreen() {
+type OrderScreenProps = {
+  route?: { params?: { prefilledProduct?: string } }
+  prefilledProduct?: string
+}
+
+export default function OrderScreen({ route, prefilledProduct }: OrderScreenProps) {
   const { user } = useAuth()
   const [products, setProducts] = useState<any[]>([])
   const [orderItems, setOrderItems] = useState<any[]>([])
@@ -18,6 +23,7 @@ export default function OrderScreen() {
   const [quantity, setQuantity] = useState('')
   const [unit, setUnit] = useState('')
   const [loading, setLoading] = useState(false)
+  const prefilledValue = route?.params?.prefilledProduct ?? prefilledProduct ?? ''
 
   useEffect(() => {
     if (user) {
@@ -41,6 +47,14 @@ export default function OrderScreen() {
       setLoading(false)
     }
   }
+
+  useEffect(() => {
+    if (!prefilledValue || products.length === 0) return
+    const product = products.find(p => p.nom === prefilledValue)
+    if (!product) return
+    setSelectedProduct(product.nom)
+    setUnit(product.unite_reference || '')
+  }, [prefilledValue, products])
 
   const addOrderItem = () => {
     if (!selectedProduct || !quantity || parseFloat(quantity) <= 0) {
