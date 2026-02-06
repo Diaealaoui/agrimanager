@@ -5,6 +5,7 @@ import * as Print from 'expo-print'
 import * as Sharing from 'expo-sharing'
 import { useAuth } from '../../hooks/useAuth'
 import Database from '../../lib/database'
+import Sidebar from '../../components/layout/Sidebar'
 import { globalStyles, typography, colors, shadows } from '../../utils/styles'
 
 type OrderScreenProps = {
@@ -23,6 +24,7 @@ export default function OrderScreen({ route, prefilledProduct }: OrderScreenProp
   const [quantity, setQuantity] = useState('')
   const [unit, setUnit] = useState('')
   const [loading, setLoading] = useState(false)
+  const [sidebarVisible, setSidebarVisible] = useState(false)
   const prefilledValue = route?.params?.prefilledProduct ?? prefilledProduct ?? ''
 
   useEffect(() => {
@@ -456,12 +458,22 @@ export default function OrderScreen({ route, prefilledProduct }: OrderScreenProp
         borderBottomRightRadius: 30,
         ...shadows.xl,
       }}>
-        <Text style={[typography.h1, { color: colors.gold, marginBottom: 4 }]}>
-          📄 Bon de Commande
-        </Text>
-        <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 14 }}>
-          Générez vos bons de commande professionnels
-        </Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <TouchableOpacity
+            onPress={() => setSidebarVisible(true)}
+            style={{ marginRight: 12 }}
+          >
+            <Text style={{ color: 'white', fontSize: 24 }}>☰</Text>
+          </TouchableOpacity>
+          <View style={{ flex: 1 }}>
+            <Text style={[typography.h1, { color: colors.gold, marginBottom: 4 }]}>
+              📄 Bon de Commande
+            </Text>
+            <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 14 }}>
+              Générez vos bons de commande professionnels
+            </Text>
+          </View>
+        </View>
       </View>
       
       <ScrollView style={{ flex: 1, padding: 20 }}>
@@ -646,6 +658,11 @@ export default function OrderScreen({ route, prefilledProduct }: OrderScreenProp
           </View>
         )}
       </ScrollView>
+
+      <Sidebar
+        isVisible={sidebarVisible}
+        onClose={() => setSidebarVisible(false)}
+      />
     </View>
   )
 }

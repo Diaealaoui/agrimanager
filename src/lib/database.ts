@@ -11,7 +11,8 @@ export const Database = {
     startDate?: string, 
     endDate?: string, 
     parcelle?: string, 
-    produit?: string
+    produit?: string,
+    typeProduit?: string
   ) {
     try {
       // 🔧 FIX: Use produit_id foreign key explicitly
@@ -48,6 +49,30 @@ export const Database = {
           const prod = t.produits || {}
           return prod.nom === produit
         })
+      }
+
+      if (typeProduit && typeProduit !== 'Tous') {
+        result = result.filter(t => {
+          const prod = t.produits || {}
+          return (prod.type_produit || '').toLowerCase().includes(typeProduit.toLowerCase())
+        })
+      }
+
+      const { data: parcellesData, error: parcellesError } = await supabase
+        .from('parcelles')
+        .select('nom, cout_par_hectare')
+        .eq('user_id', userId)
+
+      if (!parcellesError && parcellesData) {
+        const parcelleCostMap = new Map(
+          parcellesData
+            .filter(p => p.nom)
+            .map(p => [p.nom, p.cout_par_hectare ?? null])
+        )
+        result = result.map(t => ({
+          ...t,
+          cout_par_hectare: parcelleCostMap.get(t.parcelle) ?? null
+        }))
       }
       
       return result

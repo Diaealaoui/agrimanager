@@ -4,6 +4,7 @@ import { Picker } from '@react-native-picker/picker'
 import { useAuth } from '../../hooks/useAuth'
 import Database from '../../lib/database'
 import CartItem from '../../components/common/CartItem'
+import Sidebar from '../../components/layout/Sidebar'
 import { globalStyles, typography, colors, shadows } from '../../utils/styles'
 import { formatCurrency } from '../../utils/helpers'
 
@@ -23,10 +24,19 @@ export default function PurchasesScreen() {
   const [prix, setPrix] = useState('')
   const [tva, setTva] = useState(20)
   const [matiereActive, setMatiereActive] = useState('')
+  const [showSupplierSuggestions, setShowSupplierSuggestions] = useState(false)
+  const [sidebarVisible, setSidebarVisible] = useState(false)
   
   // NEW: Box unit support
   const [boxQuantity, setBoxQuantity] = useState('')
   const [showBoxQuantity, setShowBoxQuantity] = useState(false)
+
+  const supplierQuery = fournisseur.trim().toLowerCase()
+  const filteredSuppliers = supplierQuery.length === 0
+    ? suppliers.slice(0, 6)
+    : suppliers
+      .filter(s => s.toLowerCase().includes(supplierQuery))
+      .slice(0, 6)
 
   useEffect(() => {
     if (user) {
@@ -214,12 +224,22 @@ export default function PurchasesScreen() {
           borderBottomRightRadius: 30,
           ...shadows.xl,
         }}>
-          <Text style={[typography.h1, { color: colors.gold, marginBottom: 4 }]}>
-            🛒 Achats & Stock
-          </Text>
-          <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 14 }}>
-            Enregistrez vos acquisitions
-          </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <TouchableOpacity
+              onPress={() => setSidebarVisible(true)}
+              style={{ marginRight: 12 }}
+            >
+              <Text style={{ color: 'white', fontSize: 24 }}>☰</Text>
+            </TouchableOpacity>
+            <View style={{ flex: 1 }}>
+              <Text style={[typography.h1, { color: colors.gold, marginBottom: 4 }]}>
+                🛒 Achats & Stock
+              </Text>
+              <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 14 }}>
+                Enregistrez vos acquisitions
+              </Text>
+            </View>
+          </View>
         </View>
 
         <ScrollView 
@@ -245,12 +265,38 @@ export default function PurchasesScreen() {
                     placeholder="Nom du fournisseur"
                     value={fournisseur}
                     onChangeText={setFournisseur}
+                    onFocus={() => setShowSupplierSuggestions(true)}
+                    onBlur={() => setTimeout(() => setShowSupplierSuggestions(false), 120)}
                     placeholderTextColor={colors.textLight}
                   />
-                  {suppliers.length > 0 && (
-                    <Text style={[typography.small, { color: colors.textSecondary, marginTop: -8, marginBottom: 8 }]}>
-                      💡 Suggestions: {suppliers.slice(0, 3).join(', ')}
-                    </Text>
+                  {showSupplierSuggestions && filteredSuppliers.length > 0 && (
+                    <View style={{
+                      backgroundColor: 'white',
+                      borderRadius: 12,
+                      borderWidth: 1,
+                      borderColor: colors.border,
+                      marginTop: 6,
+                      maxHeight: 180,
+                      ...shadows.sm,
+                    }}>
+                      {filteredSuppliers.map((supplier) => (
+                        <TouchableOpacity
+                          key={supplier}
+                          style={{
+                            paddingHorizontal: 14,
+                            paddingVertical: 10,
+                            borderBottomWidth: 1,
+                            borderBottomColor: colors.borderLight,
+                          }}
+                          onPress={() => {
+                            setFournisseur(supplier)
+                            setShowSupplierSuggestions(false)
+                          }}
+                        >
+                          <Text style={{ color: colors.text }}>{supplier}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
                   )}
                 </View>
                 
@@ -497,6 +543,11 @@ export default function PurchasesScreen() {
             )}
           </View>
         </ScrollView>
+
+        <Sidebar
+          isVisible={sidebarVisible}
+          onClose={() => setSidebarVisible(false)}
+        />
       </View>
     </KeyboardAvoidingView>
   )
