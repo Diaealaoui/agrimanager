@@ -36,8 +36,10 @@ export default function Navigation() {
   }
 
   return (
-    <NavigationContainer>
-      {user ? <MainNavigator /> : <AuthNavigator />}
-    </NavigationContainer>
+    <View style={{ flex: 1 }}>
+      <NavigationContainer>
+        {user ? <MainNavigator /> : <AuthNavigator />}
+      </NavigationContainer>
+    </View>
   )
 }

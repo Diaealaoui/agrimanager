@@ -16,7 +16,7 @@ const Stack = createStackNavigator()
 
 export default function MainNavigator() {
   return (
-    <SafeAreaProvider>
+    <SafeAreaProvider style={{ flex: 1 }}>
       <Stack.Navigator screenOptions={{ headerShown: false }} initialRouteName="Dashboard">
         <Stack.Screen name="Dashboard" component={DashboardScreen} />
         <Stack.Screen name="Statistics" component={StatisticsScreen} />
