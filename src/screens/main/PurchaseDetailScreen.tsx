@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { View, Text, ScrollView, TextInput, TouchableOpacity, Alert, ActivityIndicator, useWindowDimensions } from 'react-native'
+import { View, Text, ScrollView, TextInput, TouchableOpacity, Alert, ActivityIndicator, useWindowDimensions, Platform } from 'react-native'
 import { Picker } from '@react-native-picker/picker'
 import * as FileSystem from 'expo-file-system'
 import * as Sharing from 'expo-sharing'
@@ -301,6 +301,109 @@ export default function PurchaseDetailScreen() {
 
   const totalValue = achats.reduce((sum, a) => sum + (a.montant_ttc || 0), 0)
 
+  const tableContent = (
+    <View style={{ width: tableBaseWidth, transform: [{ scale: tableScale }], alignSelf: 'flex-start' }}>
+      {/* Table Header */}
+      <View style={{ 
+        flexDirection: 'row', 
+        backgroundColor: colors.primary,
+        borderTopLeftRadius: 12,
+        borderTopRightRadius: 12,
+      }}>
+        <Text style={[styles.tableHeader, { width: 110 }]}>Date</Text>
+        <Text style={[styles.tableHeader, { width: 160 }]}>Produit</Text>
+        <Text style={[styles.tableHeader, { width: 120 }]}>Type</Text>
+        <Text style={[styles.tableHeader, { width: 140 }]}>Mat. Active</Text>
+        <Text style={[styles.tableHeader, { width: 140 }]}>Fournisseur</Text>
+        <Text style={[styles.tableHeader, { width: 80 }]}>Qté</Text>
+        <Text style={[styles.tableHeader, { width: 70 }]}>Unité</Text>
+        <Text style={[styles.tableHeader, { width: 90 }]}>Prix HT</Text>
+        <Text style={[styles.tableHeader, { width: 70 }]}>TVA</Text>
+        <Text style={[styles.tableHeader, { width: 90 }]}>Prix TTC</Text>
+        <Text style={[styles.tableHeader, { width: 110 }]}>Total TTC</Text>
+      </View>
+      
+      {/* Table Rows */}
+      {achats.map((a, index) => {
+        const prod = a.produits || {}
+        return (
+          <View 
+            key={a.id || index} 
+            style={{ 
+              flexDirection: 'row',
+              borderBottomWidth: 1,
+              borderBottomColor: colors.borderLight,
+              backgroundColor: index % 2 === 0 ? 'white' : colors.backgroundAlt
+            }}
+          >
+            <Text style={[styles.tableCell, { width: 110 }]}>
+              {formatDate(a.date_commande || '')}
+            </Text>
+            <Text style={[styles.tableCell, { width: 160, fontWeight: '600' }]}>
+              {a.nom}
+            </Text>
+            <Text style={[styles.tableCell, { width: 120 }]}>
+              {prod.type_produit || '-'}
+            </Text>
+            <Text style={[styles.tableCell, { width: 140, fontStyle: 'italic' }]}>
+              {prod.matiere_active || '-'}
+            </Text>
+            <Text style={[styles.tableCell, { width: 140 }]}>
+              {a.fournisseur}
+            </Text>
+            <Text style={[styles.tableCell, { width: 80, textAlign: 'right', fontWeight: '600' }]}>
+              {a.quantite_recue}
+            </Text>
+            <Text style={[styles.tableCell, { width: 70 }]}>
+              {a.unite_achat}
+            </Text>
+            <Text style={[styles.tableCell, { width: 90, textAlign: 'right' }]}>
+              {(a.prix_unitaire_ht || 0).toFixed(2)}
+            </Text>
+            <Text style={[styles.tableCell, { width: 70, textAlign: 'center' }]}>
+              {a.taux_tva}%
+            </Text>
+            <Text style={[styles.tableCell, { width: 90, textAlign: 'right' }]}>
+              {(a.prix_unitaire_ttc || 0).toFixed(2)}
+            </Text>
+            <Text style={[styles.tableCell, { width: 110, color: colors.gold, fontWeight: '700', textAlign: 'right' }]}>
+              {formatCurrency(a.montant_ttc || 0)}
+            </Text>
+          </View>
+        )
+      })}
+
+      {/* Total Row */}
+      <View style={{
+        flexDirection: 'row',
+        backgroundColor: colors.goldLight,
+        borderBottomLeftRadius: 12,
+        borderBottomRightRadius: 12,
+        borderTopWidth: 3,
+        borderTopColor: colors.gold,
+      }}>
+        <Text style={[styles.tableCell, { 
+          width: 1070, 
+          fontWeight: '700', 
+          color: colors.primary,
+          textAlign: 'right',
+          paddingRight: 20
+        }]}>
+          TOTAL GÉNÉRAL
+        </Text>
+        <Text style={[styles.tableCell, { 
+          width: 110, 
+          color: colors.primary, 
+          fontWeight: '700',
+          fontSize: 16,
+          textAlign: 'right' 
+        }]}>
+          {formatCurrency(totalValue)}
+        </Text>
+      </View>
+    </View>
+  )
+
   if (loading) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.background }}>
@@ -513,108 +616,15 @@ export default function PurchaseDetailScreen() {
             </View>
 
             <View style={[globalStyles.card, { padding: 0, overflow: 'hidden' }]}>
-              <ScrollView horizontal showsHorizontalScrollIndicator={true}>
-                <View style={{ width: tableBaseWidth, transform: [{ scale: tableScale }], alignSelf: 'flex-start' }}>
-                  {/* Table Header */}
-                  <View style={{ 
-                    flexDirection: 'row', 
-                    backgroundColor: colors.primary,
-                    borderTopLeftRadius: 12,
-                    borderTopRightRadius: 12,
-                  }}>
-                    <Text style={[styles.tableHeader, { width: 110 }]}>Date</Text>
-                    <Text style={[styles.tableHeader, { width: 160 }]}>Produit</Text>
-                    <Text style={[styles.tableHeader, { width: 120 }]}>Type</Text>
-                    <Text style={[styles.tableHeader, { width: 140 }]}>Mat. Active</Text>
-                    <Text style={[styles.tableHeader, { width: 140 }]}>Fournisseur</Text>
-                    <Text style={[styles.tableHeader, { width: 80 }]}>Qté</Text>
-                    <Text style={[styles.tableHeader, { width: 70 }]}>Unité</Text>
-                    <Text style={[styles.tableHeader, { width: 90 }]}>Prix HT</Text>
-                    <Text style={[styles.tableHeader, { width: 70 }]}>TVA</Text>
-                    <Text style={[styles.tableHeader, { width: 90 }]}>Prix TTC</Text>
-                    <Text style={[styles.tableHeader, { width: 110 }]}>Total TTC</Text>
-                  </View>
-                  
-                  {/* Table Rows */}
-                  {achats.map((a, index) => {
-                    const prod = a.produits || {}
-                    return (
-                      <View 
-                        key={a.id || index} 
-                        style={{ 
-                          flexDirection: 'row',
-                          borderBottomWidth: 1,
-                          borderBottomColor: colors.borderLight,
-                          backgroundColor: index % 2 === 0 ? 'white' : colors.backgroundAlt
-                        }}
-                      >
-                        <Text style={[styles.tableCell, { width: 110 }]}>
-                          {formatDate(a.date_commande || '')}
-                        </Text>
-                        <Text style={[styles.tableCell, { width: 160, fontWeight: '600' }]}>
-                          {a.nom}
-                        </Text>
-                        <Text style={[styles.tableCell, { width: 120 }]}>
-                          {prod.type_produit || '-'}
-                        </Text>
-                        <Text style={[styles.tableCell, { width: 140, fontStyle: 'italic' }]}>
-                          {prod.matiere_active || '-'}
-                        </Text>
-                        <Text style={[styles.tableCell, { width: 140 }]}>
-                          {a.fournisseur}
-                        </Text>
-                        <Text style={[styles.tableCell, { width: 80, textAlign: 'right', fontWeight: '600' }]}>
-                          {a.quantite_recue}
-                        </Text>
-                        <Text style={[styles.tableCell, { width: 70 }]}>
-                          {a.unite_achat}
-                        </Text>
-                        <Text style={[styles.tableCell, { width: 90, textAlign: 'right' }]}>
-                          {(a.prix_unitaire_ht || 0).toFixed(2)}
-                        </Text>
-                        <Text style={[styles.tableCell, { width: 70, textAlign: 'center' }]}>
-                          {a.taux_tva}%
-                        </Text>
-                        <Text style={[styles.tableCell, { width: 90, textAlign: 'right' }]}>
-                          {(a.prix_unitaire_ttc || 0).toFixed(2)}
-                        </Text>
-                        <Text style={[styles.tableCell, { width: 110, color: colors.gold, fontWeight: '700', textAlign: 'right' }]}>
-                          {formatCurrency(a.montant_ttc || 0)}
-                        </Text>
-                      </View>
-                    )
-                  })}
-
-                  {/* Total Row */}
-                  <View style={{
-                    flexDirection: 'row',
-                    backgroundColor: colors.goldLight,
-                    borderBottomLeftRadius: 12,
-                    borderBottomRightRadius: 12,
-                    borderTopWidth: 3,
-                    borderTopColor: colors.gold,
-                  }}>
-                    <Text style={[styles.tableCell, { 
-                      width: 1070, 
-                      fontWeight: '700', 
-                      color: colors.primary,
-                      textAlign: 'right',
-                      paddingRight: 20
-                    }]}>
-                      TOTAL GÉNÉRAL
-                    </Text>
-                    <Text style={[styles.tableCell, { 
-                      width: 110, 
-                      color: colors.primary, 
-                      fontWeight: '700',
-                      fontSize: 16,
-                      textAlign: 'right' 
-                    }]}>
-                      {formatCurrency(totalValue)}
-                    </Text>
-                  </View>
+              {Platform.OS === 'web' ? (
+                <View style={styles.webTableScroll}>
+                  {tableContent}
                 </View>
-              </ScrollView>
+              ) : (
+                <ScrollView horizontal showsHorizontalScrollIndicator={true}>
+                  {tableContent}
+                </ScrollView>
+              )}
             </View>
           </View>
         ) : (
@@ -639,6 +649,10 @@ export default function PurchaseDetailScreen() {
 }
 
 const styles = {
+  webTableScroll: {
+    width: '100%',
+    overflow: 'scroll',
+  },
   suggestionList: {
     backgroundColor: 'white',
     borderRadius: 12,

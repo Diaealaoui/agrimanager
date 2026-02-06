@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { View, Text, ScrollView, TextInput, TouchableOpacity, ActivityIndicator, Alert, useWindowDimensions } from 'react-native'
+import { View, Text, ScrollView, TextInput, TouchableOpacity, ActivityIndicator, Alert, useWindowDimensions, Platform } from 'react-native'
 import { Picker } from '@react-native-picker/picker'
 import * as FileSystem from 'expo-file-system'
 import * as Sharing from 'expo-sharing'
@@ -302,6 +302,106 @@ export default function HistoryScreen({ route }: HistoryScreenProps) {
 
   const totalCost = treatments.reduce((sum, t) => sum + (t.cout_estime || 0), 0)
 
+  const tableContent = (
+    <View style={{ width: tableBaseWidth, transform: [{ scale: tableScale }], alignSelf: 'flex-start' }}>
+      <View style={{
+        flexDirection: 'row',
+        backgroundColor: colors.primary,
+        borderTopLeftRadius: 12,
+        borderTopRightRadius: 12,
+      }}>
+        <Text style={[styles.tableHeader, { width: 110 }]}>Date</Text>
+        <Text style={[styles.tableHeader, { width: 140 }]}>Parcelle</Text>
+        <Text style={[styles.tableHeader, { width: 160 }]}>Produit</Text>
+        <Text style={[styles.tableHeader, { width: 150 }]}>Mat. Active</Text>
+        <Text style={[styles.tableHeader, { width: 80 }]}>Qte</Text>
+        <Text style={[styles.tableHeader, { width: 70 }]}>Unite</Text>
+        <Text style={[styles.tableHeader, { width: 110 }]}>Cout</Text>
+        <Text style={[styles.tableHeader, { width: 110 }]}>Cout/ha</Text>
+      </View>
+
+      {treatments.map((t, index) => {
+        const prod = t.produits || {}
+        const costPerHaValue = t.cout_par_hectare !== undefined && t.cout_par_hectare !== null
+          ? Number(t.cout_par_hectare)
+          : null
+        return (
+          <View
+            key={t.id || index}
+            style={{
+              flexDirection: 'row',
+              borderBottomWidth: 1,
+              borderBottomColor: colors.borderLight,
+              backgroundColor: index % 2 === 0 ? 'white' : colors.backgroundAlt
+            }}
+          >
+            <Text style={[styles.tableCell, { width: 110 }]}>
+              {formatDate(t.date_traitement || '')}
+            </Text>
+            <Text style={[styles.tableCell, { width: 140, fontWeight: '600' }]}>
+              {t.parcelle || '-'}
+            </Text>
+            <Text style={[styles.tableCell, { width: 160 }]}>
+              {prod.nom || '-'}
+            </Text>
+            <Text style={[styles.tableCell, { width: 150, fontStyle: 'italic' }]}>
+              {prod.matiere_active || '-'}
+            </Text>
+            <Text style={[styles.tableCell, { width: 80, textAlign: 'right', fontWeight: '600' }]}>
+              {t.quantite_utilisee || 0}
+            </Text>
+            <Text style={[styles.tableCell, { width: 70 }]}>
+              {prod.unite_reference || '-'}
+            </Text>
+            <Text style={[styles.tableCell, { width: 110, color: colors.gold, fontWeight: '700', textAlign: 'right' }]}>
+              {formatCurrency(t.cout_estime || 0)}
+            </Text>
+            <Text style={[styles.tableCell, { width: 110, textAlign: 'right' }]}>
+              {costPerHaValue !== null && Number.isFinite(costPerHaValue) ? formatCurrency(costPerHaValue) : '-'}
+            </Text>
+          </View>
+        )
+      })}
+
+      <View style={{
+        flexDirection: 'row',
+        backgroundColor: colors.goldLight,
+        borderBottomLeftRadius: 12,
+        borderBottomRightRadius: 12,
+        borderTopWidth: 3,
+        borderTopColor: colors.gold,
+      }}>
+        <Text style={[styles.tableCell, {
+          width: 710,
+          fontWeight: '700',
+          color: colors.primary,
+          textAlign: 'right',
+          paddingRight: 20
+        }]}>
+          TOTAL
+        </Text>
+        <Text style={[styles.tableCell, {
+          width: 110,
+          color: colors.primary,
+          fontWeight: '700',
+          fontSize: 16,
+          textAlign: 'right'
+        }]}>
+          {formatCurrency(totalCost)}
+        </Text>
+        <Text style={[styles.tableCell, {
+          width: 110,
+          color: colors.primary,
+          fontWeight: '700',
+          fontSize: 16,
+          textAlign: 'right'
+        }]}>
+          -
+        </Text>
+      </View>
+    </View>
+  )
+
   if (loading) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.background }}>
@@ -513,105 +613,15 @@ export default function HistoryScreen({ route }: HistoryScreenProps) {
             </View>
 
             <View style={[globalStyles.card, { padding: 0, overflow: 'hidden' }]}>
-              <ScrollView horizontal showsHorizontalScrollIndicator={true}>
-                <View style={{ width: tableBaseWidth, transform: [{ scale: tableScale }], alignSelf: 'flex-start' }}>
-                  <View style={{
-                    flexDirection: 'row',
-                    backgroundColor: colors.primary,
-                    borderTopLeftRadius: 12,
-                    borderTopRightRadius: 12,
-                  }}>
-                    <Text style={[styles.tableHeader, { width: 110 }]}>Date</Text>
-                    <Text style={[styles.tableHeader, { width: 140 }]}>Parcelle</Text>
-                    <Text style={[styles.tableHeader, { width: 160 }]}>Produit</Text>
-                    <Text style={[styles.tableHeader, { width: 150 }]}>Mat. Active</Text>
-                    <Text style={[styles.tableHeader, { width: 80 }]}>Qte</Text>
-                    <Text style={[styles.tableHeader, { width: 70 }]}>Unite</Text>
-                    <Text style={[styles.tableHeader, { width: 110 }]}>Cout</Text>
-                    <Text style={[styles.tableHeader, { width: 110 }]}>Cout/ha</Text>
-                  </View>
-
-                  {treatments.map((t, index) => {
-                    const prod = t.produits || {}
-                    const costPerHaValue = t.cout_par_hectare !== undefined && t.cout_par_hectare !== null
-                      ? Number(t.cout_par_hectare)
-                      : null
-                    return (
-                      <View
-                        key={t.id || index}
-                        style={{
-                          flexDirection: 'row',
-                          borderBottomWidth: 1,
-                          borderBottomColor: colors.borderLight,
-                          backgroundColor: index % 2 === 0 ? 'white' : colors.backgroundAlt
-                        }}
-                      >
-                        <Text style={[styles.tableCell, { width: 110 }]}>
-                          {formatDate(t.date_traitement || '')}
-                        </Text>
-                        <Text style={[styles.tableCell, { width: 140, fontWeight: '600' }]}>
-                          {t.parcelle || '-'}
-                        </Text>
-                        <Text style={[styles.tableCell, { width: 160 }]}>
-                          {prod.nom || '-'}
-                        </Text>
-                        <Text style={[styles.tableCell, { width: 150, fontStyle: 'italic' }]}>
-                          {prod.matiere_active || '-'}
-                        </Text>
-                        <Text style={[styles.tableCell, { width: 80, textAlign: 'right', fontWeight: '600' }]}>
-                          {t.quantite_utilisee || 0}
-                        </Text>
-                        <Text style={[styles.tableCell, { width: 70 }]}>
-                          {prod.unite_reference || '-'}
-                        </Text>
-                        <Text style={[styles.tableCell, { width: 110, color: colors.gold, fontWeight: '700', textAlign: 'right' }]}>
-                          {formatCurrency(t.cout_estime || 0)}
-                        </Text>
-                        <Text style={[styles.tableCell, { width: 110, textAlign: 'right' }]}>
-                          {costPerHaValue !== null && Number.isFinite(costPerHaValue) ? formatCurrency(costPerHaValue) : '-'}
-                        </Text>
-                      </View>
-                    )
-                  })}
-
-                  <View style={{
-                    flexDirection: 'row',
-                    backgroundColor: colors.goldLight,
-                    borderBottomLeftRadius: 12,
-                    borderBottomRightRadius: 12,
-                    borderTopWidth: 3,
-                    borderTopColor: colors.gold,
-                  }}>
-                    <Text style={[styles.tableCell, {
-                      width: 710,
-                      fontWeight: '700',
-                      color: colors.primary,
-                      textAlign: 'right',
-                      paddingRight: 20
-                    }]}>
-                      TOTAL
-                    </Text>
-                    <Text style={[styles.tableCell, {
-                      width: 110,
-                      color: colors.primary,
-                      fontWeight: '700',
-                      fontSize: 16,
-                      textAlign: 'right'
-                    }]}>
-                      {formatCurrency(totalCost)}
-                    </Text>
-                    <Text style={[styles.tableCell, {
-                      width: 110,
-                      color: colors.primary,
-                      fontWeight: '700',
-                      fontSize: 16,
-                      textAlign: 'right'
-                    }]}>
-                      -
-                    </Text>
-                  </View>
+              {Platform.OS === 'web' ? (
+                <View style={styles.webTableScroll}>
+                  {tableContent}
                 </View>
-              </ScrollView>
+              ) : (
+                <ScrollView horizontal showsHorizontalScrollIndicator={true}>
+                  {tableContent}
+                </ScrollView>
+              )}
             </View>
           </View>
         ) : (
@@ -636,6 +646,10 @@ export default function HistoryScreen({ route }: HistoryScreenProps) {
 }
 
 const styles = {
+  webTableScroll: {
+    width: '100%',
+    overflow: 'scroll',
+  },
   suggestionList: {
     backgroundColor: 'white',
     borderRadius: 12,
