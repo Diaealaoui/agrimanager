@@ -276,14 +276,12 @@ export default function DashboardScreen() {
   }
   const selectedMetricValue = selectedMonthIndex >= 0 ? chartValues[selectedMonthIndex] : null
 
-  return (
-    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-        <View style={{ flex: 1, backgroundColor: colors.background }}>
-          
-          {/* Header with Search */}
-          <View style={{ backgroundColor: colors.primary, padding: isSmallScreen ? 16 : 24, paddingTop: isSmallScreen ? 48 : 60, borderBottomLeftRadius: isSmallScreen ? 22 : 30, borderBottomRightRadius: isSmallScreen ? 22 : 30, ...shadows.xl }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: isSmallScreen ? 16 : 20 }}>
+  const content = (
+    <View style={{ flex: 1, backgroundColor: colors.background }}>
+      
+      {/* Header with Search */}
+      <View style={{ backgroundColor: colors.primary, padding: isSmallScreen ? 16 : 24, paddingTop: isSmallScreen ? 48 : 60, borderBottomLeftRadius: isSmallScreen ? 22 : 30, borderBottomRightRadius: isSmallScreen ? 22 : 30, ...shadows.xl }}>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: isSmallScreen ? 16 : 20 }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 12 }}>
                 <TouchableOpacity
                   onPress={() => setSidebarVisible(true)}
@@ -586,9 +584,19 @@ export default function DashboardScreen() {
             </View>
 
           </ScrollView>
-          <Sidebar isVisible={sidebarVisible} onClose={() => setSidebarVisible(false)} />
-        </View>
-      </TouchableWithoutFeedback>
+      <Sidebar isVisible={sidebarVisible} onClose={() => setSidebarVisible(false)} />
+    </View>
+  )
+
+  return (
+    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+      {Platform.OS === 'web' ? (
+        content
+      ) : (
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+          {content}
+        </TouchableWithoutFeedback>
+      )}
     </KeyboardAvoidingView>
   )
 }
