@@ -1,16 +1,15 @@
-import { StyleSheet, Dimensions } from 'react-native'
+import { StyleSheet, Dimensions, Platform } from 'react-native'
 
 const { width, height } = Dimensions.get('window')
 
 export const colors = {
-  // Luxurious color palette
-  primary: '#1a1a2e', // Deep Navy
+  primary: '#1a1a2e',
   primaryLight: '#2d3561',
   primaryDark: '#0f0f1e',
-  secondary: '#d4af37', // Gold
+  secondary: '#d4af37',
   secondaryLight: '#e8c547',
   secondaryDark: '#b8941f',
-  accent: '#16213e', // Dark Blue
+  accent: '#16213e',
   accentLight: '#4a5568',
   background: '#f8f9fa',
   backgroundAlt: '#ffffff',
@@ -22,6 +21,7 @@ export const colors = {
   textMuted: '#cbd5e1',
   border: '#e2e8f0',
   borderLight: '#f1f5f9',
+  borderAlt: '#e2e8f0',
   success: '#059669',
   successLight: '#d1fae5',
   successDark: '#047857',

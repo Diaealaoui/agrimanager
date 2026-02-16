@@ -1,553 +1,409 @@
-import React, { useState, useEffect } from 'react'
-import { View, Text, ScrollView, TextInput, TouchableOpacity, Alert, ActivityIndicator } from 'react-native'
-import { Picker } from '@react-native-picker/picker'
-import * as FileSystem from 'expo-file-system'
+import React, { useEffect, useState, useMemo } from 'react'
+import { 
+  View, Text, ScrollView, TextInput, TouchableOpacity, 
+  ActivityIndicator, Alert, useWindowDimensions, StyleSheet,
+  KeyboardAvoidingView, Platform, Keyboard
+} from 'react-native'
+import * as FileSystem from 'expo-file-system/legacy'
 import * as Sharing from 'expo-sharing'
 import { useAuth } from '../../hooks/useAuth'
 import Database from '../../lib/database'
+import Sidebar from '../../components/layout/Sidebar'
+import DateInput from '../../components/common/DateInput'
 import { globalStyles, typography, colors, shadows } from '../../utils/styles'
 import { formatCurrency, formatDate } from '../../utils/helpers'
+import { Feather } from '@expo/vector-icons'
 
-export default function PurchaseDetailScreen() {
+export default function HistoryScreen() {
   const { user } = useAuth()
+  const { width } = useWindowDimensions()
   const [loading, setLoading] = useState(true)
-  const [achats, setAchats] = useState<any[]>([])
+  const [treatments, setTreatments] = useState<any[]>([]) 
+  const [allTreatments, setAllTreatments] = useState<any[]>([]) 
+  
+  const [parcelleSearch, setParcelleSearch] = useState('')
+  const [nameSearch, setNameSearch] = useState('')
+  const [typeSearch, setTypeSearch] = useState('')
+  const [maSearch, setMaSearch] = useState('')
+
+  const [allProducts, setAllProducts] = useState<any[]>([])
+  const [allParcelles, setAllParcelles] = useState<any[]>([])
+  const [suggestions, setSuggestions] = useState<any[]>([])
+  const [activeSearchField, setActiveSearchField] = useState<'parcelle' | 'nom' | 'type' | 'ma' | null>(null)
+
+  const currentYear = new Date().getFullYear()
   const [filters, setFilters] = useState({
-    startDate: '',
-    endDate: '',
-    supplier: 'Tous',
-    activeIngredient: 'Tous',
-    search: '',
+    startDate: `${currentYear}-01-01`,
+    endDate: new Date().toISOString().split('T')[0],
   })
-  const [suppliers, setSuppliers] = useState<string[]>([])
-  const [activeIngredients, setActiveIngredients] = useState<string[]>([])
+
   const [exporting, setExporting] = useState(false)
+  const [sidebarVisible, setSidebarVisible] = useState(false)
+
+  // --- UPDATED COLUMNS CONFIGURATION (Added 'fournisseur') ---
+  const col = { 
+    date: 90, 
+    parcelle: 110, 
+    water: 80, 
+    prod: 130, 
+    supplier: 100, // <--- NEW COLUMN WIDTH
+    qtyParcelle: 90, 
+    dosageHa: 90,
+    cout: 90, 
+  }
+
+  const normalize = (str: string) => {
+    if (!str) return ''
+    return str.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9\s]/g, '').trim()
+  }
 
   useEffect(() => {
-    if (user) {
-      loadData()
-    }
+    if (user) loadInitialMeta()
   }, [user])
 
-  const loadData = async () => {
+  useEffect(() => {
+    if (user) loadTreatments()
+  }, [filters.startDate, filters.endDate, user])
+
+  useEffect(() => {
+    applyLocalFilters()
+  }, [parcelleSearch, nameSearch, typeSearch, maSearch, allTreatments])
+
+  const loadInitialMeta = async () => {
     if (!user) return
-    
+    try {
+      const [parcellesRes, produitsRes] = await Promise.all([
+        Database.obtenirParcelles(user.id),
+        Database.obtenirProduits(user.id),
+      ])
+      setAllParcelles(parcellesRes)
+      setAllProducts(produitsRes)
+    } catch (error) {
+      console.error('Error loading metadata:', error)
+    }
+  }
+
+  const loadTreatments = async () => {
+    if (!user) return
     setLoading(true)
     try {
-      const [suppliersRes, activeIngredientsRes] = await Promise.all([
-        Database.getSuppliers(user.id),
-        Database.getActiveIngredients(user.id),
-      ])
-      
-      setSuppliers(['Tous', ...suppliersRes])
-      setActiveIngredients(['Tous', ...activeIngredientsRes])
-      
-      await loadAchats()
+      // This now fetches 'fournisseur' thanks to the database.ts update
+      const data = await Database.getTraitementsWithFilters(
+        user.id, filters.startDate, filters.endDate,
+        undefined, undefined, undefined, undefined
+      )
+      setAllTreatments(data)
     } catch (error) {
-      console.error('Error loading data:', error)
+      Alert.alert('Erreur', 'Impossible de charger les traitements')
     } finally {
       setLoading(false)
     }
   }
 
-  const loadAchats = async () => {
-    if (!user) return
+  const applyLocalFilters = () => {
+    let filtered = [...allTreatments]
+    if (parcelleSearch) filtered = filtered.filter(t => normalize(t.parcelle).includes(normalize(parcelleSearch)))
+    if (nameSearch) filtered = filtered.filter(t => normalize(t.produits?.nom || t.name).includes(normalize(nameSearch)))
+    if (typeSearch) filtered = filtered.filter(t => normalize(t.produits?.type_produit || '').includes(normalize(typeSearch)))
+    if (maSearch) filtered = filtered.filter(t => normalize(t.produits?.matiere_active || '').includes(normalize(maSearch)))
+    setTreatments(filtered)
+  }
+
+  // --- GROUPING LOGIC ---
+  const groupedTreatments = useMemo(() => {
+    const groups: any = {};
     
-    try {
-      const data = await Database.getAchatsWithFilters(
-        user.id,
-        filters.startDate || undefined,
-        filters.endDate || undefined,
-        filters.supplier !== 'Tous' ? filters.supplier : undefined,
-        filters.search || undefined,
-        filters.activeIngredient !== 'Tous' ? filters.activeIngredient : undefined
-      )
-      
-      setAchats(data)
-    } catch (error) {
-      console.error('Error loading purchases:', error)
-      Alert.alert('Erreur', 'Impossible de charger les achats')
+    treatments.forEach(item => {
+      const key = item.groupe_id || `${item.date_traitement}_${item.parcelle}`;
+      if (!groups[key]) {
+        groups[key] = {
+          id: key,
+          date: item.date_traitement,
+          parcelle: item.parcelle,
+          water: item.quantite_eau || 0,
+          totalCost: 0,
+          items: []
+        };
+      }
+      groups[key].items.push(item);
+      groups[key].totalCost += (item.cout_estime || 0);
+    });
+
+    return Object.values(groups).sort((a: any, b: any) => 
+      new Date(b.date).getTime() - new Date(a.date).getTime()
+    );
+  }, [treatments]);
+
+  const totalFilteredCost = useMemo(() => {
+    return treatments.reduce((sum, t) => sum + (t.cout_estime || 0), 0)
+  }, [treatments])
+
+  const handleFuzzySearch = (text: string, field: 'parcelle' | 'nom' | 'type' | 'ma') => {
+    const query = normalize(text)
+    if (field === 'parcelle') setParcelleSearch(text)
+    if (field === 'nom') setNameSearch(text)
+    if (field === 'type') setTypeSearch(text)
+    if (field === 'ma') setMaSearch(text)
+
+    if (query.length > 0) {
+      let filteredSuggestions: any[] = []
+      if (field === 'parcelle') {
+        filteredSuggestions = allParcelles.filter(p => normalize(p.nom).includes(query)).map(p => ({ value: p.nom }))
+      } else if (field === 'nom') {
+        filteredSuggestions = allProducts.filter(p => normalize(p.nom).includes(query)).map(p => ({ value: p.nom }))
+      } else if (field === 'type') {
+        const types = Array.from(new Set(allProducts.map(p => p.type_produit).filter(Boolean)))
+        filteredSuggestions = types.filter(t => normalize(t).includes(query)).map(t => ({ value: t }))
+      } else if (field === 'ma') {
+        const mas = Array.from(new Set(allProducts.map(p => p.matiere_active).filter(Boolean)))
+        filteredSuggestions = mas.filter(m => normalize(m).includes(query)).map(m => ({ value: m }))
+      }
+      setSuggestions(filteredSuggestions.slice(0, 5))
+      setActiveSearchField(field)
+    } else {
+      setSuggestions([])
+      setActiveSearchField(null)
     }
   }
 
-  useEffect(() => {
-    if (user) loadAchats()
-  }, [filters])
+  const selectSuggestion = (value: string, field: 'parcelle' | 'nom' | 'type' | 'ma') => {
+    if (field === 'parcelle') setParcelleSearch(value)
+    if (field === 'nom') setNameSearch(value)
+    if (field === 'type') setTypeSearch(value)
+    if (field === 'ma') setMaSearch(value)
+    setSuggestions([])
+    setActiveSearchField(null)
+    Keyboard.dismiss()
+  }
 
   const exportToCSV = async () => {
-    if (achats.length === 0) {
-      Alert.alert('Aucune donnée', 'Il n\'y a pas de données à exporter')
-      return
-    }
-
+    if (treatments.length === 0) return
     setExporting(true)
     try {
-      const headers = [
-        'Date',
-        'Produit',
-        'Type',
-        'Matière Active',
-        'Fournisseur',
-        'Quantité',
-        'Unité',
-        'Prix HT',
-        'TVA %',
-        'Prix TTC',
-        'Total TTC'
-      ]
-      
-      const csvRows = [
-        headers.join(','),
-        ...achats.map(a => {
-          const prod = a.produits || {}
-          return [
-            formatDate(a.date_commande),
-            `"${a.nom || ''}"`,
-            `"${prod.type_produit || ''}"`,
-            `"${prod.matiere_active || ''}"`,
-            `"${a.fournisseur || ''}"`,
-            a.quantite_recue || 0,
-            a.unite_achat || '',
-            (a.prix_unitaire_ht || 0).toFixed(2),
-            a.taux_tva || 0,
-            (a.prix_unitaire_ttc || 0).toFixed(2),
-            (a.montant_ttc || 0).toFixed(2)
-          ].join(',')
-        })
-      ]
-
-      const csvContent = csvRows.join('\n')
-      const fileName = `Achats_${new Date().toISOString().split('T')[0]}.csv`
-      const fileUri = `${FileSystem.documentDirectory}${fileName}`
-
-      await FileSystem.writeAsStringAsync(fileUri, csvContent, {
-        encoding: FileSystem.EncodingType.UTF8,
+      // Added Fournisseur to CSV export
+      const headers = ['Date', 'Parcelle', 'Produit', 'Fournisseur', 'Quantité/Parcelle', 'Dosage/Ha', 'Eau (L)', 'Coût']
+      const rows = treatments.map(t => {
+        const pInfo = allParcelles.find(p => p.nom === t.parcelle)
+        const surf = pInfo?.surface_ha || 0
+        const doseHa = surf > 0 ? (t.quantite_utilisee / surf).toFixed(2) : '0.00'
+        return [
+          formatDate(t.date_traitement),
+          t.parcelle,
+          t.produits?.nom || t.name,
+          t.produits?.fournisseur || 'Inconnu', // Export Supplier
+          `${t.quantite_utilisee} ${t.produits?.unite_reference || ''}`,
+          `${doseHa} ${t.produits?.unite_reference || ''}/ha`,
+          t.quantite_eau || 0,
+          (t.cout_estime || 0).toFixed(2)
+        ].map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')
       })
-
-      await Sharing.shareAsync(fileUri, {
-        mimeType: 'text/csv',
-        dialogTitle: 'Télécharger le registre des achats',
-        UTI: 'public.comma-separated-values-text',
-      })
-      
-      Alert.alert('Succès', 'Fichier CSV exporté avec succès')
-    } catch (error) {
-      console.error('Error exporting CSV:', error)
-      Alert.alert('Erreur', 'Impossible d\'exporter les données')
-    } finally {
-      setExporting(false)
-    }
+      const csvString = `\uFEFF${[headers.join(','), ...rows].join('\n')}`
+      const fileUri = `${FileSystem.cacheDirectory}Rapport_Phyto.csv`
+      await FileSystem.writeAsStringAsync(fileUri, csvString, { encoding: 'utf8' })
+      await Sharing.shareAsync(fileUri)
+    } catch (e) { Alert.alert('Erreur', 'Export échoué') } finally { setExporting(false) }
   }
 
-  const exportToExcel = async () => {
-    if (achats.length === 0) {
-      Alert.alert('Aucune donnée', 'Il n\'y a pas de données à exporter')
-      return
-    }
-
-    setExporting(true)
-    try {
-      // Create HTML table for Excel
-      const headers = [
-        'Date',
-        'Produit',
-        'Type',
-        'Matière Active',
-        'Fournisseur',
-        'Quantité',
-        'Unité',
-        'Prix HT',
-        'TVA %',
-        'Prix TTC',
-        'Total TTC'
-      ]
-      
-      let htmlTable = `
-        <html>
-        <head>
-          <meta charset="UTF-8">
-          <style>
-            table { border-collapse: collapse; width: 100%; font-family: Arial, sans-serif; }
-            th { background-color: #1a1a2e; color: #d4af37; padding: 12px; text-align: left; font-weight: bold; border: 1px solid #ddd; }
-            td { padding: 10px; border: 1px solid #ddd; }
-            tr:nth-child(even) { background-color: #f8f9fa; }
-            .total-row { background-color: #f4e5c2; font-weight: bold; }
-            .header-title { color: #1a1a2e; font-size: 24px; margin-bottom: 20px; font-weight: bold; }
-          </style>
-        </head>
-        <body>
-          <div class="header-title">📋 Registre des Achats - ${new Date().toLocaleDateString('fr-FR')}</div>
-          <table>
-            <thead>
-              <tr>
-                ${headers.map(h => `<th>${h}</th>`).join('')}
-              </tr>
-            </thead>
-            <tbody>
-      `
-      
-      let totalTTC = 0
-      achats.forEach(a => {
-        const prod = a.produits || {}
-        totalTTC += a.montant_ttc || 0
-        
-        htmlTable += `
-          <tr>
-            <td>${formatDate(a.date_commande)}</td>
-            <td>${a.nom || ''}</td>
-            <td>${prod.type_produit || ''}</td>
-            <td>${prod.matiere_active || ''}</td>
-            <td>${a.fournisseur || ''}</td>
-            <td>${a.quantite_recue || 0}</td>
-            <td>${a.unite_achat || ''}</td>
-            <td>${(a.prix_unitaire_ht || 0).toFixed(2)} MAD</td>
-            <td>${a.taux_tva || 0}%</td>
-            <td>${(a.prix_unitaire_ttc || 0).toFixed(2)} MAD</td>
-            <td>${formatCurrency(a.montant_ttc || 0)}</td>
-          </tr>
-        `
-      })
-      
-      htmlTable += `
-              <tr class="total-row">
-                <td colspan="10" style="text-align: right; padding-right: 20px;">TOTAL GÉNÉRAL</td>
-                <td>${formatCurrency(totalTTC)}</td>
-              </tr>
-            </tbody>
-          </table>
-          <div style="margin-top: 30px; color: #64748b; font-size: 12px;">
-            Document généré le ${new Date().toLocaleString('fr-FR')} par AgriManager Pro
-          </div>
-        </body>
-        </html>
-      `
-
-      const fileName = `Achats_${new Date().toISOString().split('T')[0]}.xls`
-      const fileUri = `${FileSystem.documentDirectory}${fileName}`
-
-      await FileSystem.writeAsStringAsync(fileUri, htmlTable, {
-        encoding: FileSystem.EncodingType.UTF8,
-      })
-
-      await Sharing.shareAsync(fileUri, {
-        mimeType: 'application/vnd.ms-excel',
-        dialogTitle: 'Télécharger le registre des achats',
-        UTI: 'com.microsoft.excel.xls',
-      })
-      
-      Alert.alert('Succès', 'Fichier Excel exporté avec succès')
-    } catch (error) {
-      console.error('Error exporting Excel:', error)
-      Alert.alert('Erreur', 'Impossible d\'exporter les données')
-    } finally {
-      setExporting(false)
-    }
-  }
-
-  const totalValue = achats.reduce((sum, a) => sum + (a.montant_ttc || 0), 0)
-
-  if (loading) {
-    return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.background }}>
-        <ActivityIndicator size="large" color={colors.gold} />
-      </View>
-    )
-  }
+  const TotalBar = () => (
+    <View style={styles.totalBar}>
+       <View style={{flexDirection: 'row', alignItems: 'center'}}>
+         <Text style={{color: 'rgba(255,255,255,0.8)', marginRight: 5}}>Total Filtré:</Text>
+         <Text style={{color: colors.gold, fontWeight: 'bold', fontSize: 16}}>
+           {formatCurrency(totalFilteredCost)}
+         </Text>
+       </View>
+    </View>
+  )
 
   return (
-    <View style={{ flex: 1, backgroundColor: colors.background }}>
-      {/* Luxurious Header */}
-      <View style={{
-        backgroundColor: colors.primary,
-        padding: 24,
-        paddingTop: 60,
-        borderBottomLeftRadius: 30,
-        borderBottomRightRadius: 30,
-        ...shadows.xl,
-      }}>
-        <Text style={[typography.h1, { color: colors.gold, marginBottom: 4 }]}>
-          📋 Détail des Achats
-        </Text>
-        <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 14 }}>
-          Registre complet de vos acquisitions
-        </Text>
+    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: colors.background }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => setSidebarVisible(true)}><Feather name="menu" size={24} color="white" /></TouchableOpacity>
+        <Text style={[typography.h1, { color: colors.gold, marginLeft: 15 }]}>Analyse Phyto</Text>
       </View>
-      
-      <ScrollView style={{ flex: 1, padding: 20 }}>
-        {/* Filters Card */}
-        <View style={[globalStyles.cardLuxury, { marginBottom: 20 }]}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
-            <Text style={{ fontSize: 24, marginRight: 8 }}>🔍</Text>
-            <Text style={[typography.h3, { color: colors.primary }]}>Filtres</Text>
+
+      <ScrollView style={{ flex: 1, padding: 15 }} keyboardShouldPersistTaps="handled">
+        
+        {/* Filters */}
+        <View style={[globalStyles.card, { marginBottom: 15, zIndex: 100 }]}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <Text style={typography.h3}>🔍 Filtres</Text>
+            <TouchableOpacity onPress={() => { setParcelleSearch(''); setNameSearch(''); setTypeSearch(''); setMaSearch(''); }}><Text style={{ color: colors.danger }}>Effacer</Text></TouchableOpacity>
           </View>
           
-          <Text style={[typography.caption, { marginBottom: 8, color: colors.text, fontWeight: '600' }]}>
-            Recherche
-          </Text>
-          <TextInput
-            style={[globalStyles.input, { marginBottom: 16 }]}
-            placeholder="Rechercher un produit..."
-            value={filters.search}
-            onChangeText={(text) => setFilters({ ...filters, search: text })}
-            placeholderTextColor={colors.textLight}
-          />
-          
-          <View style={{ flexDirection: 'row', marginBottom: 16 }}>
-            <View style={{ flex: 1, marginRight: 8 }}>
-              <Text style={[typography.caption, { marginBottom: 8, color: colors.text, fontWeight: '600' }]}>
-                Date Début
-              </Text>
-              <TextInput
-                style={globalStyles.input}
-                value={filters.startDate}
-                onChangeText={(text) => setFilters({ ...filters, startDate: text })}
-                placeholder="AAAA-MM-JJ"
-                placeholderTextColor={colors.textLight}
-              />
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 }}>
+            <View style={{ width: '48%' }}><Text style={typography.caption}>Du</Text><DateInput value={filters.startDate} onChange={(v) => setFilters({...filters, startDate: v})} /></View>
+            <View style={{ width: '48%' }}><Text style={typography.caption}>Au</Text><DateInput value={filters.endDate} onChange={(v) => setFilters({...filters, endDate: v})} /></View>
+          </View>
+
+          <Text style={typography.caption}>Parcelle</Text>
+          <View style={{ zIndex: 2000, marginBottom: 10 }}>
+            <TextInput style={styles.input} placeholder="Nom parcelle..." value={parcelleSearch} onChangeText={(t) => handleFuzzySearch(t, 'parcelle')} />
+            {activeSearchField === 'parcelle' && suggestions.length > 0 && (
+              <View style={styles.suggestionBox}>
+                {suggestions.map((s, i) => (
+                  <TouchableOpacity key={i} style={styles.suggestionItem} onPress={() => selectSuggestion(s.value, 'parcelle')}><Text>{s.value}</Text></TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
+
+          <Text style={typography.caption}>Produit</Text>
+          <View style={{ zIndex: 1000, marginBottom: 10 }}>
+            <TextInput style={styles.input} placeholder="Nom produit..." value={nameSearch} onChangeText={(t) => handleFuzzySearch(t, 'nom')} />
+            {activeSearchField === 'nom' && suggestions.length > 0 && (
+              <View style={styles.suggestionBox}>
+                {suggestions.map((s, i) => (
+                  <TouchableOpacity key={i} style={styles.suggestionItem} onPress={() => selectSuggestion(s.value, 'nom')}><Text>{s.value}</Text></TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
+
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+            <View style={{ width: '48%', zIndex: 500 }}>
+               <Text style={typography.caption}>Type</Text>
+               <TextInput style={styles.input} placeholder="Fongicide..." value={typeSearch} onChangeText={(t) => handleFuzzySearch(t, 'type')} />
             </View>
-            <View style={{ flex: 1 }}>
-              <Text style={[typography.caption, { marginBottom: 8, color: colors.text, fontWeight: '600' }]}>
-                Date Fin
-              </Text>
-              <TextInput
-                style={globalStyles.input}
-                value={filters.endDate}
-                onChangeText={(text) => setFilters({ ...filters, endDate: text })}
-                placeholder="AAAA-MM-JJ"
-                placeholderTextColor={colors.textLight}
-              />
+            <View style={{ width: '48%', zIndex: 400 }}>
+               <Text style={typography.caption}>Mat. Active</Text>
+               <TextInput style={styles.input} placeholder="Cuivre..." value={maSearch} onChangeText={(t) => handleFuzzySearch(t, 'ma')} />
             </View>
-          </View>
-          
-          <Text style={[typography.caption, { marginBottom: 8, color: colors.text, fontWeight: '600' }]}>
-            Fournisseur
-          </Text>
-          <View style={{ 
-            backgroundColor: colors.backgroundAlt, 
-            borderRadius: 12, 
-            borderWidth: 2, 
-            borderColor: colors.border,
-            marginBottom: 16,
-          }}>
-            <Picker
-              selectedValue={filters.supplier}
-              onValueChange={(value) => setFilters({ ...filters, supplier: value })}
-              style={{ color: colors.text }}
-            >
-              {suppliers.map(s => (
-                <Picker.Item key={s} label={s} value={s} />
-              ))}
-            </Picker>
-          </View>
-          
-          <Text style={[typography.caption, { marginBottom: 8, color: colors.text, fontWeight: '600' }]}>
-            Matière Active
-          </Text>
-          <View style={{ 
-            backgroundColor: colors.backgroundAlt, 
-            borderRadius: 12, 
-            borderWidth: 2, 
-            borderColor: colors.border,
-          }}>
-            <Picker
-              selectedValue={filters.activeIngredient}
-              onValueChange={(value) => setFilters({ ...filters, activeIngredient: value })}
-              style={{ color: colors.text }}
-            >
-              {activeIngredients.map(a => (
-                <Picker.Item key={a} label={a} value={a} />
-              ))}
-            </Picker>
           </View>
         </View>
 
-        {/* Summary Card */}
-        <View style={[globalStyles.metricCardGold, { marginBottom: 20, padding: 24 }]}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
-            <View>
-              <Text style={[typography.caption, { color: colors.text, marginBottom: 4 }]}>
-                Total des Achats
-              </Text>
-              <Text style={[typography.h2, { color: colors.primary, fontWeight: '700' }]}>
-                {formatCurrency(totalValue)}
-              </Text>
-              <Text style={[typography.caption, { color: colors.textSecondary, marginTop: 4 }]}>
-                {achats.length} achat{achats.length !== 1 ? 's' : ''}
-              </Text>
+        <TouchableOpacity style={[globalStyles.button, { backgroundColor: colors.success, marginBottom: 15 }]} onPress={exportToCSV}>
+          <Text style={globalStyles.buttonText}>📥 Exporter</Text>
+        </TouchableOpacity>
+
+        {/* --- TOP TOTAL --- */}
+        <TotalBar />
+
+        {/* --- TABLE WITH HORIZONTAL SCROLL --- */}
+        <ScrollView horizontal showsHorizontalScrollIndicator={true} style={styles.tableCard}>
+          <View>
+            <View style={styles.tableHeader}>
+              <Text style={[styles.hCell, { width: col.date }]}>Date</Text>
+              <Text style={[styles.hCell, { width: col.parcelle }]}>Parcelle</Text>
+              <Text style={[styles.hCell, { width: col.water }]}>Eau</Text>
+              <Text style={[styles.hCell, { width: col.prod }]}>Produit</Text>
+              {/* NEW COLUMN HEADER */}
+              <Text style={[styles.hCell, { width: col.supplier }]}>Fourn.</Text>
+              <Text style={[styles.hCell, { width: col.qtyParcelle }]}>Qté/Parc.</Text>
+              <Text style={[styles.hCell, { width: col.dosageHa }]}>Dose/Ha</Text>
+              <Text style={[styles.hCell, { width: col.cout }]}>Coût</Text>
             </View>
-            <Text style={{ fontSize: 48 }}>💰</Text>
-          </View>
-        </View>
 
-        {/* Export Buttons */}
-        <View style={{ flexDirection: 'row', marginBottom: 20 }}>
-          <TouchableOpacity
-            style={[globalStyles.button, { 
-              flex: 1,
-              marginRight: 8,
-              backgroundColor: exporting ? colors.textLight : colors.success 
-            }]}
-            onPress={exportToCSV}
-            disabled={exporting || achats.length === 0}
-          >
-            <Text style={globalStyles.buttonText}>
-              {exporting ? 'Export...' : '📄 Export CSV'}
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[globalStyles.buttonGold, { 
-              flex: 1,
-              marginLeft: 8,
-              opacity: (exporting || achats.length === 0) ? 0.5 : 1
-            }]}
-            onPress={exportToExcel}
-            disabled={exporting || achats.length === 0}
-          >
-            <Text style={globalStyles.buttonText}>
-              {exporting ? 'Export...' : '📊 Export Excel'}
-            </Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Detailed Table */}
-        {achats.length > 0 ? (
-          <View style={[globalStyles.card, { padding: 0, overflow: 'hidden' }]}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={true}>
+            {loading ? <ActivityIndicator style={{ margin: 30 }} color={colors.gold} /> : (
               <View>
-                {/* Table Header */}
-                <View style={{ 
-                  flexDirection: 'row', 
-                  backgroundColor: colors.primary,
-                  borderTopLeftRadius: 12,
-                  borderTopRightRadius: 12,
-                }}>
-                  <Text style={[styles.tableHeader, { width: 110 }]}>Date</Text>
-                  <Text style={[styles.tableHeader, { width: 160 }]}>Produit</Text>
-                  <Text style={[styles.tableHeader, { width: 120 }]}>Type</Text>
-                  <Text style={[styles.tableHeader, { width: 140 }]}>Mat. Active</Text>
-                  <Text style={[styles.tableHeader, { width: 140 }]}>Fournisseur</Text>
-                  <Text style={[styles.tableHeader, { width: 80 }]}>Qté</Text>
-                  <Text style={[styles.tableHeader, { width: 70 }]}>Unité</Text>
-                  <Text style={[styles.tableHeader, { width: 90 }]}>Prix HT</Text>
-                  <Text style={[styles.tableHeader, { width: 70 }]}>TVA</Text>
-                  <Text style={[styles.tableHeader, { width: 90 }]}>Prix TTC</Text>
-                  <Text style={[styles.tableHeader, { width: 110 }]}>Total TTC</Text>
-                </View>
-                
-                {/* Table Rows */}
-                {achats.map((a, index) => {
-                  const prod = a.produits || {}
+                {(groupedTreatments as any[]).map((group, gIndex) => {
+                  const pInfo = allParcelles.find(p => p.nom === group.parcelle)
+                  const surface = pInfo?.surface_ha || 0
+
                   return (
-                    <View 
-                      key={a.id || index} 
-                      style={{ 
-                        flexDirection: 'row',
-                        borderBottomWidth: 1,
-                        borderBottomColor: colors.borderLight,
-                        backgroundColor: index % 2 === 0 ? 'white' : colors.backgroundAlt
-                      }}
-                    >
-                      <Text style={[styles.tableCell, { width: 110 }]}>
-                        {formatDate(a.date_commande)}
-                      </Text>
-                      <Text style={[styles.tableCell, { width: 160, fontWeight: '600' }]}>
-                        {a.nom}
-                      </Text>
-                      <Text style={[styles.tableCell, { width: 120 }]}>
-                        {prod.type_produit || '-'}
-                      </Text>
-                      <Text style={[styles.tableCell, { width: 140, fontStyle: 'italic' }]}>
-                        {prod.matiere_active || '-'}
-                      </Text>
-                      <Text style={[styles.tableCell, { width: 140 }]}>
-                        {a.fournisseur}
-                      </Text>
-                      <Text style={[styles.tableCell, { width: 80, textAlign: 'right', fontWeight: '600' }]}>
-                        {a.quantite_recue}
-                      </Text>
-                      <Text style={[styles.tableCell, { width: 70 }]}>
-                        {a.unite_achat}
-                      </Text>
-                      <Text style={[styles.tableCell, { width: 90, textAlign: 'right' }]}>
-                        {(a.prix_unitaire_ht || 0).toFixed(2)}
-                      </Text>
-                      <Text style={[styles.tableCell, { width: 70, textAlign: 'center' }]}>
-                        {a.taux_tva}%
-                      </Text>
-                      <Text style={[styles.tableCell, { width: 90, textAlign: 'right' }]}>
-                        {(a.prix_unitaire_ttc || 0).toFixed(2)}
-                      </Text>
-                      <Text style={[styles.tableCell, { width: 110, color: colors.gold, fontWeight: '700', textAlign: 'right' }]}>
-                        {formatCurrency(a.montant_ttc || 0)}
-                      </Text>
+                    <View key={group.id}>
+                      {group.items.map((item: any, i: number) => {
+                        const doseHa = surface > 0 ? (item.quantite_utilisee / surface).toFixed(2) : '0.00'
+                        const isFirst = i === 0
+
+                        return (
+                          <View key={i} style={[
+                            styles.tableRow, 
+                            { 
+                              backgroundColor: gIndex % 2 === 0 ? '#fff' : '#f8f9fa',
+                              borderBottomWidth: i === group.items.length - 1 ? 1 : 0,
+                              borderBottomColor: '#cbd5e1'
+                            }
+                          ]}>
+                            {/* MERGED CELLS */}
+                            <Text style={[styles.cell, { width: col.date, color: isFirst ? colors.text : 'transparent', fontWeight: '600' }]}>
+                              {isFirst ? formatDate(group.date) : ''}
+                            </Text>
+                            
+                            <Text style={[styles.cell, { width: col.parcelle, color: isFirst ? colors.text : 'transparent', fontWeight: '600' }]}>
+                              {isFirst ? group.parcelle : ''}
+                            </Text>
+
+                            <View style={{ width: col.water, justifyContent: 'center', alignItems: 'center' }}>
+                              {isFirst && group.water > 0 ? (
+                                <View>
+                                  <Text style={[styles.cell, { width: col.water, color: colors.primary, fontWeight: 'bold' }]}>
+                                    {group.water} L
+                                  </Text>
+                                  {surface > 0 && (
+                                     <Text style={{ fontSize: 9, color: colors.textSecondary, textAlign: 'center' }}>
+                                       {(group.water / surface).toFixed(0)} L/Ha
+                                     </Text>
+                                  )}
+                                </View>
+                              ) : null}
+                            </View>
+
+                            {/* PRODUCT DETAILS */}
+                            <View style={{ width: col.prod, paddingHorizontal: 10 }}>
+                              <Text style={{ fontSize: 12, fontWeight: '600', color: colors.text }}>
+                                {item.produits?.nom || item.name}
+                              </Text>
+                            </View>
+
+                            {/* NEW SUPPLIER COLUMN */}
+                            <View style={{ width: col.supplier, paddingHorizontal: 5 }}>
+                               <Text style={{ fontSize: 11, color: colors.textSecondary, textAlign: 'center' }} numberOfLines={1}>
+                                 {item.produits?.fournisseur || '-'}
+                               </Text>
+                            </View>
+
+                            <Text style={[styles.cell, { width: col.qtyParcelle }]}>
+                              {item.quantite_utilisee} {item.produits?.unite_reference || ''}
+                            </Text>
+
+                            <Text style={[styles.cell, { width: col.dosageHa, color: colors.success }]}>
+                              {doseHa}/ha
+                            </Text>
+
+                            <Text style={[styles.cell, { width: col.cout, fontWeight: 'bold', color: colors.gold }]}>
+                              {formatCurrency(item.cout_estime)}
+                            </Text>
+                          </View>
+                        )
+                      })}
                     </View>
                   )
                 })}
-
-                {/* Total Row */}
-                <View style={{
-                  flexDirection: 'row',
-                  backgroundColor: colors.goldLight,
-                  borderBottomLeftRadius: 12,
-                  borderBottomRightRadius: 12,
-                  borderTopWidth: 3,
-                  borderTopColor: colors.gold,
-                }}>
-                  <Text style={[styles.tableCell, { 
-                    width: 1060, 
-                    fontWeight: '700', 
-                    color: colors.primary,
-                    textAlign: 'right',
-                    paddingRight: 20
-                  }]}>
-                    TOTAL GÉNÉRAL
-                  </Text>
-                  <Text style={[styles.tableCell, { 
-                    width: 110, 
-                    color: colors.primary, 
-                    fontWeight: '700',
-                    fontSize: 16,
-                    textAlign: 'right' 
-                  }]}>
-                    {formatCurrency(totalValue)}
-                  </Text>
-                </View>
               </View>
-            </ScrollView>
+            )}
           </View>
-        ) : (
-          <View style={[globalStyles.card, { alignItems: 'center', padding: 48 }]}>
-            <Text style={{ fontSize: 64, marginBottom: 20 }}>📭</Text>
-            <Text style={[typography.h3, { textAlign: 'center', marginBottom: 8, color: colors.text }]}>
-              Aucun achat trouvé
-            </Text>
-            <Text style={[typography.caption, { textAlign: 'center', color: colors.textSecondary }]}>
-              Ajustez vos filtres de recherche ou ajoutez de nouveaux achats
-            </Text>
-          </View>
-        )}
+        </ScrollView>
+        
+        {/* --- BOTTOM TOTAL --- */}
+        <View style={{ marginBottom: 50 }}>
+          <TotalBar />
+        </View>
+
       </ScrollView>
-    </View>
+      <Sidebar isVisible={sidebarVisible} onClose={() => setSidebarVisible(false)} />
+    </KeyboardAvoidingView>
   )
 }
 
-const styles = {
-  tableHeader: {
-    padding: 14,
-    fontWeight: '700',
-    fontSize: 12,
-    color: colors.gold,
-    textTransform: 'uppercase' as const,
-    letterSpacing: 0.8,
-    borderRightWidth: 1,
-    borderRightColor: 'rgba(212, 175, 55, 0.3)',
-  },
-  tableCell: {
-    padding: 14,
-    fontSize: 13,
-    color: colors.text,
-    borderRightWidth: 1,
-    borderRightColor: colors.borderLight,
+const styles = StyleSheet.create({
+  header: { backgroundColor: colors.primary, padding: 20, paddingTop: 50, flexDirection: 'row', alignItems: 'center', borderBottomRightRadius: 25 },
+  input: { borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 12, marginTop: 5, backgroundColor: 'white' },
+  suggestionBox: { backgroundColor: '#fff', borderWidth: 1, borderColor: colors.border, borderRadius: 8, marginTop: 2, position: 'absolute', top: 55, left: 0, right: 0, zIndex: 5000, maxHeight: 200, ...shadows.md },
+  suggestionItem: { padding: 12, borderBottomWidth: 1, borderBottomColor: '#eee' },
+  tableCard: { backgroundColor: 'white', borderRadius: 12, ...shadows.sm, marginBottom: 15 },
+  tableHeader: { flexDirection: 'row', backgroundColor: colors.primary, paddingVertical: 14 },
+  tableRow: { flexDirection: 'row', paddingVertical: 12, alignItems: 'center' },
+  hCell: { color: 'white', fontSize: 11, fontWeight: 'bold', paddingHorizontal: 5, textAlign: 'center' },
+  cell: { fontSize: 12, color: colors.text, paddingHorizontal: 5, textAlign: 'center' },
+  totalBar: {
+    backgroundColor: colors.primary,
+    padding: 12,
+    borderRadius: 10,
+    marginBottom: 15,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    ...shadows.sm
   }
-}
+})

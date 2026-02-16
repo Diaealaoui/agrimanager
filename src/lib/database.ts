@@ -6,15 +6,16 @@ import { supabase } from './supabase'
 
 export const Database = {
   // ========== FIXED: getTraitementsWithFilters ==========
-  async getTraitementsWithFilters(
+async getTraitementsWithFilters(
     userId: string, 
     startDate?: string, 
     endDate?: string, 
     parcelle?: string, 
-    produit?: string
+    produit?: string,
+    typeProduit?: string
   ) {
     try {
-      // 🔧 FIX: Use produit_id foreign key explicitly
+      // 🔧 FIX: Added 'fournisseur' to the select list
       let query = supabase
         .from('traitements')
         .select(`
@@ -24,7 +25,8 @@ export const Database = {
             nom,
             type_produit,
             matiere_active,
-            unite_reference
+            unite_reference,
+            fournisseur 
           )
         `)
         .eq('user_id', userId)
@@ -49,6 +51,30 @@ export const Database = {
           return prod.nom === produit
         })
       }
+
+      if (typeProduit && typeProduit !== 'Tous') {
+        result = result.filter(t => {
+          const prod = t.produits || {}
+          return (prod.type_produit || '').toLowerCase().includes(typeProduit.toLowerCase())
+        })
+      }
+
+      const { data: parcellesData, error: parcellesError } = await supabase
+        .from('parcelles')
+        .select('nom, cout_par_hectare')
+        .eq('user_id', userId)
+
+      if (!parcellesError && parcellesData) {
+        const parcelleCostMap = new Map(
+          parcellesData
+            .filter(p => p.nom)
+            .map(p => [p.nom, p.cout_par_hectare ?? null])
+        )
+        result = result.map(t => ({
+          ...t,
+          cout_par_hectare: parcelleCostMap.get(t.parcelle) ?? null
+        }))
+      }
       
       return result
     } catch (error) {
@@ -56,7 +82,6 @@ export const Database = {
       return []
     }
   },
-
   // ========== FIXED: getAchatsWithFilters ==========
   async getAchatsWithFilters(
     userId: string,
@@ -121,6 +146,33 @@ export const Database = {
     } catch (error) {
       console.error('Error fetching purchases:', error)
       return []
+    }
+  },
+
+// Add product stock
+
+  async addProduct(userId: string, productData: any) {
+    try {
+      const { data, error } = await supabase
+        .from('produits')
+        .insert({
+          user_id: userId,
+          nom: productData.nom,
+          type_produit: productData.type || 'Autre',
+          matiere_active: productData.ma || '',
+          unite_reference: productData.unite || 'L',
+          stock_actuel: parseFloat(productData.stock || '0'),
+          prix_moyen: parseFloat(productData.price || '0'),
+          fournisseur: productData.fournisseur || 'Inconnu'
+        })
+        .select()
+        .single()
+
+      if (error) throw error
+      return { success: true, product: data }
+    } catch (error) {
+      console.error('Error adding product:', error)
+      return { success: false, error: (error as Error).message }
     }
   },
 
@@ -414,7 +466,31 @@ export const Database = {
   },
 
   // ========== SEARCH FUNCTIONALITY METHODS ==========
-
+  // Add this to your database.ts file
+  async getAllPurchases(userId: string) {
+    try {
+      const { data, error } = await supabase
+        .from('achats')
+        .select(`
+          *,
+          produits!achats_produit_id_fkey(
+            id,
+            nom,
+            type_produit,
+            matiere_active
+          )
+        `)
+        .eq('user_id', userId)
+        .order('date_commande', { ascending: false })
+    
+      if (error) throw error
+    
+      return { success: true, purchases: data || [] }
+    } catch (error) {
+      console.error('Error getting all purchases:', error)
+      return { success: false, error: (error as Error).message, purchases: [] }
+    }
+  },
   async getAllProducts(userId: string) {
     try {
       // First get all products
@@ -569,28 +645,37 @@ export const Database = {
 
   // ========== PURCHASES ==========
 
+// ... inside Database object
+
   async enregistrerAchatComplet(data: any, userId: string) {
     try {
       const {
         nom,
         type_produit,
         matiere_active,
-        quantite,
-        unite_ref,
-        unite_achat,
-        prix_u_ht,
+        quantite,      // User Input: Number of Boxes (e.g., 10)
+        unite_ref,     // Reference Unit (e.g., "L")
+        unite_achat,   // Display Unit (e.g., "Boîte")
+        prix_u_ht,     // User Input: Price per Box (e.g., 200)
         taux_tva,
         fournisseur,
         date,
-        box_quantity,
-        is_box_unit,
+        box_quantity,  // User Input: Capacity per Box (e.g., 0.5)
+        is_box_unit,   // Boolean: true if packaged
       } = data
 
-      // Calculate actual stock for box units
-      let actualQuantity = quantite
+      // 1. Calculate REAL Stock Quantity (Reference Units)
+      let quantityForStock = parseFloat(quantite)
       if (is_box_unit && box_quantity) {
-        actualQuantity = quantite * box_quantity
+        quantityForStock = parseFloat(quantite) * parseFloat(box_quantity)
       }
+
+      // 2. Calculate Financials
+      const totalHT = parseFloat(quantite) * parseFloat(prix_u_ht)
+      
+      // 3. Calculate Normalized Price (Price per Reference Unit)
+      // This is the "Last Price" we want to save
+      const pricePerRefUnit = quantityForStock > 0 ? totalHT / quantityForStock : 0
 
       // Check if product exists
       const { data: existingProduct } = await supabase
@@ -603,19 +688,20 @@ export const Database = {
       let productId: string
 
       if (!existingProduct) {
-        // Create new product
+        // --- NEW PRODUCT ---
         const { data: newProduct, error: createError } = await supabase
           .from('produits')
           .insert({
             nom,
             unite_reference: unite_ref,
-            stock_actuel: actualQuantity,
-            prix_moyen: prix_u_ht,
+            stock_actuel: quantityForStock,
+            prix_moyen: pricePerRefUnit, // Initial Price
             type_produit: type_produit || 'Autre',
             matiere_active: matiere_active || '',
             user_id: userId,
             box_quantity: box_quantity || null,
             is_box_unit: is_box_unit || false,
+            fournisseur: fournisseur || 'Inconnu'
           })
           .select()
           .single()
@@ -623,39 +709,34 @@ export const Database = {
         if (createError) throw createError
         productId = newProduct!.id
       } else {
-        // Update existing product
+        // --- UPDATE PRODUCT ---
         productId = existingProduct.id
         const oldStock = parseFloat((existingProduct.stock_actuel || 0).toString())
-        const oldPrice = parseFloat((existingProduct.prix_moyen || 0).toString())
-        const newQty = actualQuantity
-        const newPrice = parseFloat(prix_u_ht.toString())
-
-        const totalStock = oldStock + newQty
-        let avgPrice = newPrice
         
-        if (totalStock > 0) {
-          avgPrice = ((oldStock * oldPrice) + (newQty * newPrice)) / totalStock
-        }
-
+        // CHANGED: We now use the NEW price directly (Last Price), ignoring the old average
+        const newStockPrice = pricePerRefUnit 
+        
+        const totalStock = oldStock + quantityForStock
+        
         const { error: updateError } = await supabase
           .from('produits')
           .update({
             stock_actuel: totalStock,
-            prix_moyen: avgPrice,
-            type_produit: type_produit || existingProduct.type_produit || 'Autre',
-            matiere_active: matiere_active || existingProduct.matiere_active || '',
+            prix_moyen: newStockPrice, // <--- UPDATED TO USE LAST PRICE
+            type_produit: type_produit || existingProduct.type_produit,
+            matiere_active: matiere_active || existingProduct.matiere_active,
             box_quantity: box_quantity || existingProduct.box_quantity,
             is_box_unit: is_box_unit !== undefined ? is_box_unit : existingProduct.is_box_unit,
+            fournisseur: fournisseur || existingProduct.fournisseur
           })
           .eq('id', productId)
 
         if (updateError) throw updateError
       }
 
-      // Record purchase
-      const totalHT = quantite * prix_u_ht
+      // --- RECORD HISTORY ---
       const montantTVA = totalHT * (taux_tva / 100)
-      const prixUnitaireTTC = prix_u_ht * (1 + (taux_tva / 100))
+      const prixUnitaireTTC = parseFloat(prix_u_ht) * (1 + (taux_tva / 100))
 
       const { error: purchaseError } = await supabase
         .from('achats')
@@ -664,9 +745,9 @@ export const Database = {
           produit_id: productId,
           nom,
           fournisseur,
-          quantite_recue: quantite,
-          unite_achat,
-          prix_unitaire_ht: prix_u_ht,
+          quantite_recue: parseFloat(quantite),
+          unite_achat: unite_achat,
+          prix_unitaire_ht: parseFloat(prix_u_ht),
           prix_unitaire_ttc: prixUnitaireTTC,
           montant_tva: montantTVA,
           montant_ttc: totalHT + montantTVA,
@@ -682,7 +763,6 @@ export const Database = {
       return { success: false, error: (error as Error).message }
     }
   },
-
   async getProductPurchaseHistory(userId: string, productId: string) {
     try {
       const { data, error } = await supabase
@@ -702,45 +782,41 @@ export const Database = {
 
   // ========== TREATMENTS ==========
 
-  async enregistrerTraitementBatch(traitements: any[]) {
+// Update signature to accept waterVolume
+  async enregistrerTraitementBatch(traitements: any[], waterVolume: number) {
     try {
       const results = []
+      const groupeId = `T-${Date.now()}-${Math.floor(Math.random() * 10000)}`
       
       for (const t of traitements) {
+        // ... (Keep existing stock update logic exactly as it is) ...
+        
+        // ... inside the loop, getting product data ...
         const { data: productData, error: productError } = await supabase
           .from('produits')
           .select('stock_actuel, prix_moyen')
           .eq('id', t.produit_id)
           .single()
-
-        if (productError) {
-          console.error(`Error getting product ${t.produit_id}:`, productError)
-          continue
-        }
+          
+        if (productError) continue
 
         const cout = parseFloat(t.quantite_utilisee) * parseFloat((productData!.prix_moyen || 0).toString())
         t.cout_estime = cout
 
+        // Update Stock
         const newStock = parseFloat((productData!.stock_actuel || 0).toString()) - parseFloat(t.quantite_utilisee)
-        
-        const { error: updateError } = await supabase
-          .from('produits')
-          .update({ stock_actuel: newStock })
-          .eq('id', t.produit_id)
+        await supabase.from('produits').update({ stock_actuel: newStock }).eq('id', t.produit_id)
 
-        if (updateError) {
-          console.error(`Error updating stock for ${t.produit_id}:`, updateError)
-          continue
-        }
-
-        results.push(t)
+        // PUSH TO RESULT WITH WATER INFO
+        results.push({
+          ...t,
+          groupe_id: groupeId,
+          quantite_eau: waterVolume // <--- SAVING THE WATER VOLUME
+        })
       }
 
       if (results.length > 0) {
-        const { error: insertError } = await supabase
-          .from('traitements')
-          .insert(results)
-
+        const { error: insertError } = await supabase.from('traitements').insert(results)
         if (insertError) throw insertError
         return { success: true, count: results.length }
       }
@@ -754,17 +830,16 @@ export const Database = {
 
   // ========== STATISTICS ==========
 
-  async getProductStatsByYear(userId: string, year: number) {
+async getProductStatsByYear(userId: string, year: number) {
     try {
       const startDate = `${year}-01-01`
       const endDate = `${year}-12-31`
       
-      // 🔧 FIX: Use explicit foreign key
       const { data: achats, error } = await supabase
         .from('achats')
         .select(`
           *,
-          produits!achats_produit_id_fkey(type_produit)
+          produits!achats_produit_id_fkey(type_produit, matiere_active)
         `)
         .eq('user_id', userId)
         .gte('date_commande', startDate)
@@ -775,22 +850,87 @@ export const Database = {
       const stats = {
         par_mois: {},
         par_type: {},
-        par_fournisseur: {}
+        par_fournisseur: {},
+        par_matiere_active: {} // Added this
       }
 
       achats?.forEach(achat => {
+        const amount = achat.montant_ttc || 0
         const month = achat.date_commande.substring(0, 7)
         const type = achat.produits?.type_produit || 'Autre'
         const supplier = achat.fournisseur || 'Inconnu'
         
-        stats.par_mois[month] = (stats.par_mois[month] || 0) + (achat.montant_ttc || 0)
-        stats.par_type[type] = (stats.par_type[type] || 0) + (achat.montant_ttc || 0)
-        stats.par_fournisseur[supplier] = (stats.par_fournisseur[supplier] || 0) + (achat.montant_ttc || 0)
+        // Month, Type, Supplier Stats
+        stats.par_mois[month] = (stats.par_mois[month] || 0) + amount
+        stats.par_type[type] = (stats.par_type[type] || 0) + amount
+        stats.par_fournisseur[supplier] = (stats.par_fournisseur[supplier] || 0) + amount
+
+        // NEW: Active Ingredient Stats
+        const maString = achat.produits?.matiere_active
+        if (maString && maString.trim() !== '') {
+          // Split by comma in case of multiple ingredients (e.g. "Glyphosate, 2,4-D")
+          const ingredients = maString.split(',').map((s: string) => s.trim())
+          ingredients.forEach((ing: string) => {
+            if (ing) {
+              stats.par_matiere_active[ing] = (stats.par_matiere_active[ing] || 0) + amount
+            }
+          })
+        }
       })
 
       return { success: true, stats }
     } catch (error) {
       console.error('Error getting stats:', error)
+      return { success: false, error: (error as Error).message }
+    }
+  },
+async getParcelDetails(userId: string, parcelleName: string, year: number) {
+    try {
+      // Get Parcel Info
+      const { data: parcelle, error: pError } = await supabase
+        .from('parcelles')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('nom', parcelleName)
+        .single()
+      
+      if (pError) throw pError
+
+      // Get Treatments for this parcel
+      const startDate = `${year}-01-01`
+      const endDate = `${year}-12-31`
+      
+      const { data: traitements, error: tError } = await supabase
+        .from('traitements')
+        .select(`
+          *,
+          produits!traitements_produit_id_fkey(nom, unite_reference, matiere_active)
+        `)
+        .eq('user_id', userId)
+        .eq('parcelle', parcelleName)
+        .gte('date_traitement', startDate)
+        .lte('date_traitement', endDate)
+        .order('date_traitement', { ascending: false })
+
+      if (tError) throw tError
+
+      // Calculate totals
+      const totalCost = traitements?.reduce((sum, t) => sum + (t.cout_estime || 0), 0) || 0
+      const costPerHa = parcelle.surface_ha ? (totalCost / parcelle.surface_ha) : 0
+
+      return {
+        success: true,
+        data: {
+          info: parcelle,
+          traitements: traitements || [],
+          stats: {
+            totalCost,
+            costPerHa
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error getting parcel details:', error)
       return { success: false, error: (error as Error).message }
     }
   },

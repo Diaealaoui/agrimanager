@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react'
+import React, { useState, useEffect, useMemo, useRef } from 'react'
 import {
   View,
   Text,
@@ -13,6 +13,7 @@ import {
   Platform,
   TouchableWithoutFeedback,
   Keyboard,
+  useWindowDimensions,
   Dimensions
 } from 'react-native'
 import { useNavigation } from '@react-navigation/native'
@@ -21,8 +22,7 @@ import Database from '../../lib/database'
 import { globalStyles, typography, colors, shadows } from '../../utils/styles'
 import { formatCurrency } from '../../utils/helpers'
 import { Feather } from '@expo/vector-icons'
-
-const { width } = Dimensions.get('window')
+import Sidebar from '../../components/layout/Sidebar'
 
 interface DashboardStats {
   totalSpent: number
@@ -76,15 +76,23 @@ interface SearchResult {
   amount?: number
   icon: string
   color: string
+  purchases?: any[]
+  relatedProducts?: any[]
+  orderCount?: number
+  productCount?: number
 }
 
 export default function DashboardScreen() {
   const { user } = useAuth()
   const navigation = useNavigation()
+  const { width } = useWindowDimensions()
+  const isSmallScreen = width < 380
+  const isMediumScreen = width < 768
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const currentYear = new Date().getFullYear()
+  const monthLabels = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Aoû', 'Sep', 'Oct', 'Nov', 'Déc']
   
   const [selectedYear, setSelectedYear] = useState(currentYear)
   const [searchQuery, setSearchQuery] = useState('')
@@ -93,6 +101,7 @@ export default function DashboardScreen() {
   const [selectedFilter, setSelectedFilter] = useState<'all' | 'product' | 'supplier' | 'ingredient'>('all')
   const [selectedMetric, setSelectedMetric] = useState<'spending' | 'orders' | 'avg'>('spending')
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null)
+  const [sidebarVisible, setSidebarVisible] = useState(false)
 
   const [selectedItemDetails, setSelectedItemDetails] = useState<any>(null)
   const [isDetailModalVisible, setIsDetailModalVisible] = useState(false)
@@ -100,6 +109,9 @@ export default function DashboardScreen() {
   const [allProducts, setAllProducts] = useState<any[]>([])
   const [allSuppliers, setAllSuppliers] = useState<any[]>([])
   const [allActiveIngredients, setAllActiveIngredients] = useState<any[]>([])
+  const [allPurchases, setAllPurchases] = useState<any[]>([])
+
+  const scrollViewRef = useRef<ScrollView>(null)
 
   useEffect(() => {
     if (user) {
@@ -126,14 +138,16 @@ export default function DashboardScreen() {
   const loadAllDataForSearch = async () => {
     if (!user) return
     try {
-      const [productsResult, suppliersResult, ingredientsResult] = await Promise.all([
+      const [productsResult, suppliersResult, ingredientsResult, purchasesResult] = await Promise.all([
         Database.getAllProducts(user.id),
         Database.getAllSuppliers(user.id),
-        Database.getAllActiveIngredients(user.id)
+        Database.getAllActiveIngredients(user.id),
+        Database.getAllPurchases(user.id)
       ])
       if (productsResult.success) setAllProducts(productsResult.products || [])
       if (suppliersResult.success) setAllSuppliers(suppliersResult.suppliers || [])
       if (ingredientsResult.success) setAllActiveIngredients(ingredientsResult.ingredients || [])
+      if (purchasesResult.success) setAllPurchases(purchasesResult.purchases || [])
     } catch (error) {
       console.error('Error loading search data:', error)
     }
@@ -144,9 +158,11 @@ export default function DashboardScreen() {
       setSearchResults([])
       return
     }
+    
     const query = searchQuery.toLowerCase().trim()
     const results: SearchResult[] = []
 
+    // Search products
     if (selectedFilter === 'all' || selectedFilter === 'product') {
       allProducts
         .filter(product => 
@@ -155,6 +171,8 @@ export default function DashboardScreen() {
           (product.matiere_active || '').toLowerCase().includes(query)
         )
         .forEach(product => {
+          const productPurchases = allPurchases?.filter(p => p.produit_id === product.id) || []
+          
           results.push({
             type: 'product',
             id: product.id,
@@ -162,56 +180,130 @@ export default function DashboardScreen() {
             details: `${product.type_produit || 'Non spécifié'} • MA: ${product.matiere_active || 'Aucune'}`,
             amount: product.totalAmount || 0,
             icon: 'package',
-            color: colors.primary
+            color: colors.primary,
+            purchases: productPurchases
           })
         })
     }
 
+    // Search suppliers
     if (selectedFilter === 'all' || selectedFilter === 'supplier') {
-      allSuppliers
-        .filter(supplier => supplier.name.toLowerCase().includes(query))
-        .forEach(supplier => {
-          results.push({
-            type: 'supplier',
-            id: supplier.id,
-            name: supplier.name,
-            details: `${supplier.orderCount} commandes`,
-            amount: supplier.totalAmount,
-            icon: 'building',
-            color: colors.secondary
-          })
+      const supplierPurchases = allPurchases?.filter(p => 
+        p.fournisseur?.toLowerCase().includes(query)
+      ) || []
+      
+      const suppliersMap = new Map<string, {
+        totalAmount: number;
+        orderCount: number;
+        purchases: any[];
+      }>()
+      
+      supplierPurchases.forEach(purchase => {
+        const supplierName = purchase.fournisseur || 'Inconnu'
+        const existing = suppliersMap.get(supplierName) || {
+          totalAmount: 0,
+          orderCount: 0,
+          purchases: []
+        }
+        
+        existing.totalAmount += purchase.montant_ttc || 0
+        existing.orderCount += 1
+        existing.purchases.push(purchase)
+        
+        suppliersMap.set(supplierName, existing)
+      })
+      
+      suppliersMap.forEach((data, supplierName) => {
+        results.push({
+          type: 'supplier',
+          id: supplierName,
+          name: supplierName,
+          details: `${data.orderCount} commandes • Total: ${formatCurrency(data.totalAmount)}`,
+          amount: data.totalAmount,
+          icon: 'building',
+          color: colors.secondary,
+          purchases: data.purchases,
+          orderCount: data.orderCount
         })
+      })
     }
 
+    // Search active ingredients
     if (selectedFilter === 'all' || selectedFilter === 'ingredient') {
-      allActiveIngredients
+      const matchedIngredients = allActiveIngredients
         .filter(ingredient => ingredient.name.toLowerCase().includes(query))
-        .forEach(ingredient => {
-          results.push({
-            type: 'ingredient',
-            id: ingredient.id,
-            name: ingredient.name,
-            details: `Utilisé dans ${ingredient.productCount} produits`,
-            amount: ingredient.totalAmount,
-            icon: 'flask',
-            color: colors.gold
-          })
+        .slice(0, 10)
+      
+      matchedIngredients.forEach(ingredient => {
+        const relatedProducts = allProducts.filter(p => 
+          (p.matiere_active || '')
+            .toLowerCase()
+            .split(',')
+            .map(ma => ma.trim())
+            .includes(ingredient.name.toLowerCase())
+        )
+        
+        const ingredientPurchases = allPurchases?.filter(p => 
+          relatedProducts.some(prod => prod.id === p.produit_id)
+        ) || []
+        
+        results.push({
+          type: 'ingredient',
+          id: ingredient.id,
+          name: ingredient.name,
+          details: `Utilisé dans ${ingredient.productCount} produits • Total: ${formatCurrency(ingredient.totalAmount)}`,
+          amount: ingredient.totalAmount,
+          icon: 'flask',
+          color: colors.gold,
+          relatedProducts: relatedProducts,
+          purchases: ingredientPurchases,
+          productCount: ingredient.productCount
         })
+      })
     }
+    
     setSearchResults(results.slice(0, 10))
-  }, [searchQuery, selectedFilter, allProducts, allSuppliers, allActiveIngredients])
+  }, [searchQuery, selectedFilter, allProducts, allSuppliers, allActiveIngredients, allPurchases])
 
   const handleSearchResultPress = (item: SearchResult) => {
     setIsSearching(false)
+    
     if (item.type === 'product') {
       const fullProduct = allProducts.find(p => p.id === item.id)
-      setSelectedItemDetails(fullProduct)
+      setSelectedItemDetails({
+        ...fullProduct,
+        type: 'product',
+        purchases: item.purchases || []
+      })
       setIsDetailModalVisible(true)
+      
+    } else if (item.type === 'supplier') {
+      setSelectedItemDetails({
+        name: item.name,
+        type: 'supplier',
+        purchases: item.purchases || [],
+        orderCount: item.orderCount || 0,
+        totalAmount: item.amount || 0
+      })
+      setIsDetailModalVisible(true)
+      
     } else if (item.type === 'ingredient') {
       const relatedProducts = allProducts.filter(p => 
-        (p.matiere_active || '').toLowerCase().includes(item.name.toLowerCase())
+        (p.matiere_active || '')
+          .toLowerCase()
+          .split(',')
+          .map(ma => ma.trim())
+          .includes(item.name.toLowerCase())
       )
-      setSelectedItemDetails({ name: item.name, isIngredient: true, products: relatedProducts })
+      
+      setSelectedItemDetails({
+        name: item.name,
+        type: 'ingredient',
+        relatedProducts: relatedProducts,
+        purchases: item.purchases || [],
+        productCount: relatedProducts.length,
+        totalAmount: item.amount || 0
+      })
       setIsDetailModalVisible(true)
     }
   }
@@ -231,10 +323,19 @@ export default function DashboardScreen() {
     return { value: growth, isPositive: growth > 0, previousYearTotal }
   }, [stats])
 
-  const maxMonthlyAmount = useMemo(() => {
-    if (!stats?.monthlyData) return 0
-    return Math.max(...stats.monthlyData.map(m => m.amount))
-  }, [stats])
+  const chartValues = useMemo(() => {
+    const data = stats?.monthlyData || []
+    return data.map(month => {
+      if (selectedMetric === 'orders') return month.orders || 0
+      if (selectedMetric === 'avg') return month.orders ? month.amount / month.orders : 0
+      return month.amount || 0
+    })
+  }, [stats, selectedMetric])
+
+  const maxChartValue = useMemo(() => {
+    if (chartValues.length === 0) return 0
+    return Math.max(...chartValues)
+  }, [chartValues])
 
   if (loading && !refreshing) {
     return (
@@ -254,220 +355,1286 @@ export default function DashboardScreen() {
   const monthlyData = stats?.monthlyData || []
 
   const selectedMonthData = selectedMonth ? monthlyData.find(m => m.month === selectedMonth) : null
+  const selectedMonthIndex = selectedMonth ? monthlyData.findIndex(m => m.month === selectedMonth) : -1
+  const selectedMonthLabel = selectedMonthData
+    ? `${monthLabels[parseInt(selectedMonthData.month.split('-')[1], 10) - 1] || selectedMonthData.month.split('-')[1]} ${selectedYear}`
+    : ''
+  const formatMetricValue = (value: number) => {
+    if (selectedMetric === 'orders') return `${Math.round(value)}`
+    return formatCurrency(value)
+  }
+  const selectedMetricValue = selectedMonthIndex >= 0 ? chartValues[selectedMonthIndex] : null
 
   return (
-    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-        <View style={{ flex: 1, backgroundColor: colors.background }}>
-          
-          {/* Header with Search */}
-          <View style={{ backgroundColor: colors.primary, padding: 24, paddingTop: 60, borderBottomLeftRadius: 30, borderBottomRightRadius: 30, ...shadows.xl }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-              <View>
-                <Text style={[typography.h1, { color: colors.gold, marginBottom: 4 }]}>Tableau de Bord</Text>
-                <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 14 }}>Analyse financière d'exploitation</Text>
-              </View>
-              <TouchableOpacity onPress={() => setIsSearching(true)} style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.gold, justifyContent: 'center', alignItems: 'center', ...shadows.md }}>
-                <Feather name="search" size={22} color="white" />
-              </TouchableOpacity>
-            </View>
-
-            <TouchableOpacity onPress={() => setIsSearching(true)} style={{ backgroundColor: 'white', borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', ...shadows.sm }}>
-              <Feather name="search" size={20} color={colors.textSecondary} />
-              <Text style={{ marginLeft: 12, color: colors.textSecondary, fontSize: 16, flex: 1 }}>{searchQuery || "Rechercher produits, matières actives..."}</Text>
+    <View style={{ flex: 1, backgroundColor: colors.background }}>
+      
+      {/* Header with Search */}
+      <View style={{ 
+        backgroundColor: colors.primary, 
+        padding: isSmallScreen ? 12 : 16, 
+        paddingTop: isSmallScreen ? 48 : 60, 
+        borderBottomLeftRadius: 20, 
+        borderBottomRightRadius: 20, 
+        ...shadows.md 
+      }}>
+        <View style={{ 
+          flexDirection: 'row', 
+          justifyContent: 'space-between', 
+          alignItems: 'center', 
+          marginBottom: isSmallScreen ? 12 : 16 
+        }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
+            <TouchableOpacity
+              onPress={() => setSidebarVisible(true)}
+              style={{
+                width: 40,
+                height: 40,
+                borderRadius: 20,
+                backgroundColor: 'rgba(255,255,255,0.15)',
+                justifyContent: 'center',
+                alignItems: 'center',
+                marginRight: 12,
+              }}
+            >
+              <Feather name="menu" size={20} color="white" />
             </TouchableOpacity>
-
-            <View style={{ flexDirection: 'row', marginTop: 20 }}>
-              <View style={{ flex: 1, alignItems: 'center' }}>
-                <Text style={{ color: colors.gold, fontSize: 20, fontWeight: 'bold' }}>{formatCurrency(totalSpent)}</Text>
-                <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 12 }}>Dépenses</Text>
-              </View>
-              <View style={{ flex: 1, alignItems: 'center' }}>
-                <Text style={{ color: colors.gold, fontSize: 20, fontWeight: 'bold' }}>{totalOrders}</Text>
-                <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 12 }}>Commandes</Text>
-              </View>
-              <View style={{ flex: 1, alignItems: 'center' }}>
-                <Text style={{ color: colors.gold, fontSize: 20, fontWeight: 'bold' }}>{formatCurrency(monthlyAvg)}</Text>
-                <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 12 }}>Moyenne/mois</Text>
-              </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[typography.h1, { 
+                color: colors.gold, 
+                marginBottom: 4, 
+                fontSize: isSmallScreen ? 20 : 24,
+                lineHeight: isSmallScreen ? 24 : 28 
+              }]}>
+                Tableau de Bord
+              </Text>
+              <Text style={{ 
+                color: 'rgba(255,255,255,0.8)', 
+                fontSize: isSmallScreen ? 11 : 12,
+                lineHeight: 14 
+              }}>
+                Analyse financière d'exploitation
+              </Text>
             </View>
           </View>
+          <TouchableOpacity 
+            onPress={() => setIsSearching(true)} 
+            style={{ 
+              width: 40, 
+              height: 40, 
+              borderRadius: 20, 
+              backgroundColor: colors.gold, 
+              justifyContent: 'center', 
+              alignItems: 'center',
+              ...shadows.sm 
+            }}
+          >
+            <Feather name="search" size={20} color="white" />
+          </TouchableOpacity>
+        </View>
 
-          {/* Search Modal */}
-          <Modal visible={isSearching} animationType="slide" transparent={true}>
-            <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', paddingTop: 80 }}>
-              <View style={{ backgroundColor: colors.background, marginHorizontal: 20, borderRadius: 20, maxHeight: '80%', ...shadows.xl }}>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: colors.border }}>
-                  <Text style={[typography.h3, { color: colors.primary }]}>Recherche</Text>
-                  <TouchableOpacity onPress={() => setIsSearching(false)}><Feather name="x" size={24} color={colors.textSecondary} /></TouchableOpacity>
-                </View>
-                <View style={{ padding: 16 }}>
-                  <TextInput style={globalStyles.input} placeholder="Tapez pour rechercher..." value={searchQuery} onChangeText={setSearchQuery} autoFocus />
-                </View>
+        <TouchableOpacity 
+          onPress={() => setIsSearching(true)} 
+          style={{ 
+            backgroundColor: 'white', 
+            borderRadius: 10, 
+            paddingHorizontal: 12, 
+            paddingVertical: 10, 
+            flexDirection: 'row', 
+            alignItems: 'center',
+            ...shadows.sm,
+            marginBottom: 12
+          }}
+        >
+          <Feather name="search" size={18} color={colors.textSecondary} />
+          <Text style={{ 
+            marginLeft: 8, 
+            color: colors.textSecondary, 
+            fontSize: isSmallScreen ? 13 : 14, 
+            flex: 1 
+          }} numberOfLines={1}>
+            {searchQuery || "Rechercher produits, fournisseurs..."}
+          </Text>
+        </TouchableOpacity>
+
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+          <View style={{ alignItems: 'center', flex: 1 }}>
+            <Text style={{ 
+              color: colors.gold, 
+              fontSize: isSmallScreen ? 16 : 18, 
+              fontWeight: 'bold' 
+            }}>
+              {formatCurrency(totalSpent)}
+            </Text>
+            <Text style={{ 
+              color: 'rgba(255,255,255,0.8)', 
+              fontSize: isSmallScreen ? 10 : 11 
+            }}>
+              Dépenses
+            </Text>
+          </View>
+          <View style={{ alignItems: 'center', flex: 1 }}>
+            <Text style={{ 
+              color: colors.gold, 
+              fontSize: isSmallScreen ? 16 : 18, 
+              fontWeight: 'bold' 
+            }}>
+              {totalOrders}
+            </Text>
+            <Text style={{ 
+              color: 'rgba(255,255,255,0.8)', 
+              fontSize: isSmallScreen ? 10 : 11 
+            }}>
+              Commandes
+            </Text>
+          </View>
+          <View style={{ alignItems: 'center', flex: 1 }}>
+            <Text style={{ 
+              color: colors.gold, 
+              fontSize: isSmallScreen ? 16 : 18, 
+              fontWeight: 'bold' 
+            }}>
+              {formatCurrency(monthlyAvg)}
+            </Text>
+            <Text style={{ 
+              color: 'rgba(255,255,255,0.8)', 
+              fontSize: isSmallScreen ? 10 : 11 
+            }}>
+              Moyenne/mois
+            </Text>
+          </View>
+        </View>
+      </View>
+
+      {/* Search Modal */}
+      <Modal visible={isSearching} animationType="slide" transparent={true}>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <View style={{ 
+            flex: 1, 
+            backgroundColor: 'rgba(0,0,0,0.5)', 
+            paddingTop: Platform.OS === 'ios' ? 40 : 20 
+          }}>
+            <View style={{ 
+              backgroundColor: colors.background, 
+              marginHorizontal: 12, 
+              borderRadius: 16, 
+              maxHeight: '80%',
+              ...shadows.xl 
+            }}>
+              <View style={{ 
+                flexDirection: 'row', 
+                justifyContent: 'space-between', 
+                alignItems: 'center', 
+                padding: 16, 
+                borderBottomWidth: 1, 
+                borderBottomColor: colors.border 
+              }}>
+                <Text style={[typography.h3, { color: colors.primary }]}>Recherche</Text>
+                <TouchableOpacity onPress={() => setIsSearching(false)}>
+                  <Feather name="x" size={24} color={colors.textSecondary} />
+                </TouchableOpacity>
+              </View>
+              
+              <View style={{ padding: 16 }}>
+                <TextInput 
+                  style={[globalStyles.input, { fontSize: 16 }]} 
+                  placeholder="Tapez pour rechercher..." 
+                  value={searchQuery} 
+                  onChangeText={setSearchQuery} 
+                  autoFocus 
+                />
+                
+                <ScrollView 
+                  horizontal 
+                  showsHorizontalScrollIndicator={false}
+                  style={{ marginTop: 12, marginBottom: 8 }}
+                >
+                  <View style={{ flexDirection: 'row' }}>
+                    {['all', 'product', 'supplier', 'ingredient'].map((filter) => (
+                      <TouchableOpacity
+                        key={filter}
+                        onPress={() => setSelectedFilter(filter as any)}
+                        style={{
+                          paddingHorizontal: 12,
+                          paddingVertical: 6,
+                          borderRadius: 8,
+                          backgroundColor: selectedFilter === filter ? colors.primary : colors.backgroundAlt,
+                          marginRight: 8,
+                          minWidth: 80,
+                          alignItems: 'center'
+                        }}
+                      >
+                        <Text style={{ 
+                          fontSize: 12, 
+                          fontWeight: '500',
+                          color: selectedFilter === filter ? 'white' : colors.textSecondary 
+                        }}>
+                          {filter === 'all' ? 'Tous' : 
+                           filter === 'product' ? 'Produits' : 
+                           filter === 'supplier' ? 'Fournisseurs' : 
+                           'Matières Actives'}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </ScrollView>
+              </View>
+              
+              {searchResults.length > 0 ? (
                 <FlatList
                   data={searchResults}
                   keyExtractor={(item) => `${item.type}-${item.id}`}
                   renderItem={({ item }) => (
-                    <TouchableOpacity style={{ padding: 16, borderBottomWidth: 1, borderBottomColor: colors.borderAlt, flexDirection: 'row', alignItems: 'center' }} onPress={() => handleSearchResultPress(item)}>
-                      <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: item.color + '20', justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
-                        <Feather name={item.icon as any} size={20} color={item.color} />
+                    <TouchableOpacity 
+                      style={{ 
+                        padding: 12, 
+                        borderBottomWidth: 1, 
+                        borderBottomColor: colors.borderAlt, 
+                        flexDirection: 'row', 
+                        alignItems: 'center' 
+                      }} 
+                      onPress={() => handleSearchResultPress(item)}
+                    >
+                      <View style={{ 
+                        width: 36, 
+                        height: 36, 
+                        borderRadius: 18, 
+                        backgroundColor: item.color + '20', 
+                        justifyContent: 'center', 
+                        alignItems: 'center', 
+                        marginRight: 12 
+                      }}>
+                        <Feather name={item.icon as any} size={18} color={item.color} />
                       </View>
                       <View style={{ flex: 1 }}>
-                        <Text style={[typography.body, { fontWeight: '600' }]}>{item.name}</Text>
-                        <Text style={[typography.caption, { color: colors.textSecondary }]}>{item.details}</Text>
+                        <Text style={[typography.body, { 
+                          fontWeight: '600', 
+                          fontSize: 14 
+                        }]}>
+                          {item.name}
+                        </Text>
+                        <Text style={[typography.caption, { 
+                          color: colors.textSecondary,
+                          fontSize: 12 
+                        }]}>
+                          {item.details}
+                        </Text>
                       </View>
+                      <Feather name="chevron-right" size={16} color={colors.textLight} />
                     </TouchableOpacity>
                   )}
+                  style={{ maxHeight: 300 }}
                 />
-              </View>
-            </View>
-          </Modal>
-
-          {/* Detail Modal */}
-          <Modal visible={isDetailModalVisible} animationType="fade" transparent={true}>
-            <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', padding: 20 }}>
-              <View style={{ backgroundColor: 'white', borderRadius: 20, padding: 24, ...shadows.xl }}>
-                <Text style={[typography.h2, { color: colors.primary, marginBottom: 8 }]}>{selectedItemDetails?.name || selectedItemDetails?.nom}</Text>
-                
-                {selectedItemDetails?.isIngredient ? (
-                   <View>
-                     <Text style={[typography.body, { marginBottom: 16 }]}>Utilisé dans {selectedItemDetails.products?.length} produits:</Text>
-                     {selectedItemDetails.products?.map((p: any) => (
-                       <View key={p.id} style={{ marginBottom: 12, padding: 12, backgroundColor: colors.backgroundAlt, borderRadius: 8 }}>
-                         <Text style={{ fontWeight: 'bold', color: colors.primary }}>{p.nom}</Text>
-                         <Text style={typography.small}>Stock: {p.stock_actuel} {p.unite_reference} • {formatCurrency(p.prix_moyen || 0)}/u</Text>
-                         <TouchableOpacity onPress={() => { setIsDetailModalVisible(false); navigation.navigate('Order' as never, { prefilledProduct: p.nom } as any); }} style={{ marginTop: 8 }}>
-                           <Text style={{ color: colors.gold, fontWeight: 'bold' }}>🛒 Commander</Text>
-                         </TouchableOpacity>
-                       </View>
-                     ))}
-                   </View>
-                ) : (
-                  <View>
-                    <Text style={typography.body}>Type: {selectedItemDetails?.type_produit}</Text>
-                    <Text style={typography.body}>MA: {selectedItemDetails?.matiere_active || 'N/A'}</Text>
-                    <Text style={typography.body}>Stock: {selectedItemDetails?.stock_actuel} {selectedItemDetails?.unite_reference}</Text>
-                    <Text style={[typography.h3, { color: colors.gold, marginVertical: 15 }]}>Dépenses: {formatCurrency(selectedItemDetails?.totalAmount || 0)}</Text>
-                    <TouchableOpacity style={globalStyles.buttonGold} onPress={() => { setIsDetailModalVisible(false); navigation.navigate('Order' as never, { prefilledProduct: selectedItemDetails?.nom } as any); }}>
-                      <Text style={globalStyles.buttonText}>🛒 Commander</Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
-                <TouchableOpacity onPress={() => setIsDetailModalVisible(false)} style={{ marginTop: 20, alignSelf: 'center' }}><Text style={{ color: colors.textSecondary }}>Fermer</Text></TouchableOpacity>
-              </View>
-            </View>
-          </Modal>
-
-          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 20 }} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.gold]} />}>
-            
-            {/* Period Selection */}
-            <View style={[globalStyles.card, { marginBottom: 20, padding: 16 }]}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 }}>
-                <Text style={[typography.h3, { color: colors.primary }]}>Période d'analyse</Text>
-                {growthData && (
-                  <Text style={{ color: growthData.isPositive ? colors.success : colors.danger, fontWeight: '600' }}>
-                    {growthData.isPositive ? '▲' : '▼'} {Math.abs(growthData.value).toFixed(1)}% vs {selectedYear - 1}
+              ) : searchQuery.trim() !== '' ? (
+                <View style={{ padding: 40, alignItems: 'center' }}>
+                  <Feather name="search" size={36} color={colors.textLight} />
+                  <Text style={[typography.body, { 
+                    color: colors.textSecondary, 
+                    marginTop: 12,
+                    fontSize: 14 
+                  }]}>
+                    Aucun résultat trouvé
                   </Text>
-                )}
-              </View>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                {[currentYear, currentYear - 1, currentYear - 2].map(year => (
-                  <TouchableOpacity key={year} onPress={() => setSelectedYear(year)} style={{ paddingHorizontal: 20, paddingVertical: 12, backgroundColor: selectedYear === year ? colors.primary : colors.backgroundAlt, borderRadius: 12, marginRight: 10, borderWidth: 2, borderColor: selectedYear === year ? colors.gold : colors.border }}>
-                    <Text style={{ color: selectedYear === year ? 'white' : colors.text, fontWeight: '700' }}>{year}</Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            </View>
-
-            {/* Metrics */}
-            <View style={{ flexDirection: 'row', marginBottom: 20 }}>
-               {[
-                 { key: 'spending', label: 'Dépenses', icon: 'dollar-sign', value: formatCurrency(totalSpent), color: colors.primary },
-                 { key: 'orders', label: 'Commandes', icon: 'shopping-cart', value: totalOrders, color: colors.secondary },
-                 { key: 'avg', label: 'Moyenne', icon: 'trending-up', value: formatCurrency(monthlyAvg), color: colors.gold }
-               ].map(m => (
-                 <View key={m.key} style={[globalStyles.metricCard, { flex: 1, marginHorizontal: 4 }]}>
-                    <Text style={[typography.small, { color: colors.textSecondary }]}>{m.label}</Text>
-                    <Text style={{ color: m.color, fontWeight: '700', fontSize: 14 }}>{m.value}</Text>
-                 </View>
-               ))}
-            </View>
-
-            {/* Financial Trend Chart */}
-            <View style={[globalStyles.card, { marginBottom: 20, padding: 16 }]}>
-              <Text style={[typography.h3, { color: colors.primary, marginBottom: 16 }]}>📈 Évolution des Dépenses</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                <View style={{ flexDirection: 'row', height: 120, alignItems: 'flex-end', paddingBottom: 10 }}>
-                  {monthlyData.map((m, i) => (
-                    <View key={i} style={{ width: 30, marginHorizontal: 5, alignItems: 'center' }}>
-                       <View style={{ height: maxMonthlyAmount > 0 ? (m.amount/maxMonthlyAmount)*80 : 0, width: 15, backgroundColor: colors.primary, borderRadius: 4 }} />
-                       <Text style={{ fontSize: 8, marginTop: 4 }}>{m.month.split('-')[1]}</Text>
-                    </View>
-                  ))}
                 </View>
-              </ScrollView>
+              ) : null}
             </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
 
-            {/* Top Expenses */}
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20 }}>
-                <View style={[globalStyles.card, { flex: 1, marginRight: 8, padding: 12 }]}>
-                  <Text style={[typography.body, { fontWeight: '600', marginBottom: 8 }]}>Produits Top</Text>
-                  {topProducts.slice(0, 3).map((p, i) => (
-                    <Text key={i} style={typography.caption} numberOfLines={1}>• {p.name}: {formatCurrency(p.amount)}</Text>
-                  ))}
-                </View>
-                <View style={[globalStyles.card, { flex: 1, marginLeft: 8, padding: 12 }]}>
-                  <Text style={[typography.body, { fontWeight: '600', marginBottom: 8 }]}>Fournisseurs Top</Text>
-                  {topSuppliers.slice(0, 3).map((s, i) => (
-                    <Text key={i} style={typography.caption} numberOfLines={1}>• {s.name}: {formatCurrency(s.amount)}</Text>
-                  ))}
-                </View>
-            </View>
-
-            {/* Product Distribution */}
-            {productTypes.length > 0 && (
-              <View style={[globalStyles.card, { marginBottom: 20, padding: 16 }]}>
-                <Text style={[typography.h3, { color: colors.primary, marginBottom: 12 }]}>🏷️ Répartition par Type</Text>
-                {productTypes.map((t, i) => (
-                  <View key={i} style={{ marginBottom: 10 }}>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                      <Text style={typography.small}>{t.type}</Text>
-                      <Text style={[typography.small, { fontWeight: 'bold' }]}>{formatCurrency(t.amount)}</Text>
-                    </View>
-                    <View style={{ height: 6, backgroundColor: colors.borderAlt, borderRadius: 3, marginTop: 4 }}>
-                      <View style={{ width: totalSpent > 0 ? `${(t.amount/totalSpent)*100}%` : '0%', height: '100%', backgroundColor: colors.gold, borderRadius: 3 }} />
-                    </View>
-                  </View>
-                ))}
-              </View>
-            )}
-
-            {/* Parcel Costs Table */}
-            <View style={[globalStyles.cardLuxury, { marginBottom: 32 }]}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                <Text style={[typography.h2, { color: colors.primary }]}>🚜 Coût par Parcelle</Text>
-                <TouchableOpacity onPress={() => navigation.navigate('History' as never)}>
-                  <Text style={{ color: colors.primary, fontSize: 12, fontWeight: '600' }}>Voir détails →</Text>
+      {/* Detail Modal */}
+      <Modal visible={isDetailModalVisible} animationType="fade" transparent={true}>
+        <View style={{ 
+          flex: 1, 
+          backgroundColor: 'rgba(0,0,0,0.7)', 
+          justifyContent: 'center', 
+          padding: isSmallScreen ? 12 : 16 
+        }}>
+          <ScrollView style={{ 
+            backgroundColor: 'white', 
+            borderRadius: 16, 
+            maxHeight: '85%',
+            ...shadows.xl 
+          }}>
+            <View style={{ padding: isSmallScreen ? 16 : 20 }}>
+              {/* Header */}
+              <View style={{ 
+                flexDirection: 'row', 
+                justifyContent: 'space-between', 
+                alignItems: 'center', 
+                marginBottom: 16 
+              }}>
+                <Text style={[typography.h2, { 
+                  color: colors.primary, 
+                  flex: 1,
+                  fontSize: isSmallScreen ? 18 : 20 
+                }]}>
+                  {selectedItemDetails?.name || selectedItemDetails?.nom}
+                </Text>
+                <TouchableOpacity onPress={() => setIsDetailModalVisible(false)}>
+                  <Feather name="x" size={24} color={colors.textSecondary} />
                 </TouchableOpacity>
               </View>
-              {parcelStats.length > 0 ? (
-                parcelStats.map((parcel, index) => (
-                  <View key={index} style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 12, borderBottomWidth: index < parcelStats.length - 1 ? 1 : 0, borderBottomColor: colors.borderAlt }}>
-                    <View><Text style={{ fontWeight: '600' }}>{parcel.name}</Text><Text style={typography.small}>{parcel.surface.toFixed(2)} ha</Text></View>
-                    <View style={{ alignItems: 'flex-end' }}>
-                       <Text style={{ color: colors.primary, fontWeight: '700' }}>{formatCurrency(parcel.cost)}</Text>
-                       <Text style={{ color: colors.gold, fontSize: 11 }}>{formatCurrency(parcel.costPerHa)}/ha</Text>
+              
+              {/* Product Details */}
+              {selectedItemDetails?.type === 'product' && (
+                <View>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+                    <View style={{ 
+                      width: 50, 
+                      height: 50, 
+                      borderRadius: 25, 
+                      backgroundColor: colors.primary + '20', 
+                      justifyContent: 'center', 
+                      alignItems: 'center', 
+                      marginRight: 12 
+                    }}>
+                      <Feather name="package" size={24} color={colors.primary} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[typography.body, { fontSize: 14 }]}>
+                        Type: {selectedItemDetails?.type_produit || 'Non spécifié'}
+                      </Text>
+                      <Text style={[typography.body, { fontSize: 14 }]}>
+                        Matière Active: {selectedItemDetails?.matiere_active || 'N/A'}
+                      </Text>
                     </View>
                   </View>
-                ))
-              ) : (
-                <Text style={{ textAlign: 'center', color: colors.textSecondary, padding: 20 }}>Aucune donnée disponible</Text>
+                  
+                  <View style={{ 
+                    flexDirection: 'row', 
+                    justifyContent: 'space-between', 
+                    marginBottom: 16 
+                  }}>
+                    <View style={{ alignItems: 'center', flex: 1 }}>
+                      <Text style={[typography.small, { fontSize: 12 }]}>Stock Actuel</Text>
+                      <Text style={[typography.h3, { 
+                        color: colors.primary, 
+                        fontSize: isSmallScreen ? 16 : 18 
+                      }]}>
+                        {selectedItemDetails?.stock_actuel || 0} {selectedItemDetails?.unite_reference || 'u'}
+                      </Text>
+                    </View>
+                    <View style={{ alignItems: 'center', flex: 1 }}>
+                      <Text style={[typography.small, { fontSize: 12 }]}>Prix Moyen</Text>
+                      <Text style={[typography.h3, { 
+                        color: colors.gold, 
+                        fontSize: isSmallScreen ? 16 : 18 
+                      }]}>
+                        {formatCurrency(selectedItemDetails?.prix_moyen || 0)}
+                      </Text>
+                    </View>
+                  </View>
+                  
+                  <View style={[globalStyles.card, { 
+                    padding: 12, 
+                    marginBottom: 16 
+                  }]}>
+                    <Text style={[typography.h4, { 
+                      color: colors.primary, 
+                      marginBottom: 8,
+                      fontSize: 14 
+                    }]}>
+                      Dépenses Total
+                    </Text>
+                    <Text style={[typography.h2, { 
+                      color: colors.gold, 
+                      textAlign: 'center',
+                      fontSize: isSmallScreen ? 20 : 24 
+                    }]}>
+                      {formatCurrency(selectedItemDetails?.totalAmount || 0)}
+                    </Text>
+                  </View>
+                  
+                  {/* Purchase History */}
+                  {selectedItemDetails?.purchases?.length > 0 && (
+                    <View style={{ marginTop: 16 }}>
+                      <Text style={[typography.h4, { 
+                        marginBottom: 8,
+                        fontSize: 14 
+                      }]}>
+                        Historique des Achats
+                      </Text>
+                      {selectedItemDetails.purchases.slice(0, 3).map((purchase: any, index: number) => (
+                        <TouchableOpacity
+                          key={index}
+                          style={{ 
+                            padding: 10, 
+                            backgroundColor: colors.backgroundAlt, 
+                            borderRadius: 8,
+                            marginBottom: 8 
+                          }}
+                          onPress={() => {
+                            setIsDetailModalVisible(false);
+                            navigation.navigate('PurchaseDetail' as never, { purchaseId: purchase.id } as any);
+                          }}
+                        >
+                          <Text style={{ 
+                            fontWeight: 'bold',
+                            fontSize: 13 
+                          }}>
+                            {purchase.nom}
+                          </Text>
+                          <View style={{ 
+                            flexDirection: 'row', 
+                            justifyContent: 'space-between', 
+                            marginTop: 4 
+                          }}>
+                            <Text style={[typography.small, { fontSize: 11 }]}>
+                              {new Date(purchase.date_commande).toLocaleDateString('fr-FR')}
+                            </Text>
+                            <Text style={[typography.small, { 
+                              color: colors.gold, 
+                              fontWeight: 'bold',
+                              fontSize: 11 
+                            }]}>
+                              {formatCurrency(purchase.montant_ttc || 0)}
+                            </Text>
+                          </View>
+                          <Text style={[typography.small, { fontSize: 11 }]}>
+                            Fournisseur: {purchase.fournisseur || 'Inconnu'}
+                          </Text>
+                          <Text style={[typography.small, { fontSize: 11 }]}>
+                            Quantité: {purchase.quantite_recue} {purchase.unite_achat}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                      {selectedItemDetails.purchases.length > 3 && (
+                        <Text style={[typography.small, { 
+                          textAlign: 'center', 
+                          color: colors.textSecondary, 
+                          marginTop: 8,
+                          fontSize: 11 
+                        }]}>
+                          + {selectedItemDetails.purchases.length - 3} autres achats
+                        </Text>
+                      )}
+                    </View>
+                  )}
+                  
+                  <TouchableOpacity 
+                    style={[globalStyles.buttonGold, { 
+                      marginTop: 16,
+                      paddingVertical: 12 
+                    }]} 
+                    onPress={() => { 
+                      setIsDetailModalVisible(false); 
+                      navigation.navigate('Order' as never, { prefilledProduct: selectedItemDetails?.nom } as any); 
+                    }}
+                  >
+                    <Text style={globalStyles.buttonText}>🛒 Commander ce produit</Text>
+                  </TouchableOpacity>
+                </View>
               )}
+              
+              {/* Supplier Details */}
+              {selectedItemDetails?.type === 'supplier' && (
+                <View>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
+                    <View style={{ 
+                      width: 50, 
+                      height: 50, 
+                      borderRadius: 25, 
+                      backgroundColor: colors.secondary + '20', 
+                      justifyContent: 'center', 
+                      alignItems: 'center', 
+                      marginRight: 12 
+                    }}>
+                      <Feather name="building" size={24} color={colors.secondary} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[typography.h3, { 
+                        color: colors.primary,
+                        fontSize: isSmallScreen ? 16 : 18 
+                      }]}>
+                        {selectedItemDetails.name}
+                      </Text>
+                      <Text style={[typography.body, { 
+                        color: colors.textSecondary,
+                        fontSize: 13 
+                      }]}>
+                        {selectedItemDetails.orderCount} commandes
+                      </Text>
+                    </View>
+                  </View>
+                  
+                  <View style={[globalStyles.card, { 
+                    padding: 12, 
+                    marginBottom: 16 
+                  }]}>
+                    <Text style={[typography.h4, { 
+                      color: colors.primary, 
+                      marginBottom: 8,
+                      fontSize: 14 
+                    }]}>
+                      Total Dépensé
+                    </Text>
+                    <Text style={[typography.h2, { 
+                      color: colors.gold, 
+                      textAlign: 'center',
+                      fontSize: isSmallScreen ? 20 : 24 
+                    }]}>
+                      {formatCurrency(selectedItemDetails.totalAmount || 0)}
+                    </Text>
+                  </View>
+                  
+                  {/* Recent Purchases */}
+                  {selectedItemDetails?.purchases?.length > 0 && (
+                    <View>
+                      <Text style={[typography.h4, { 
+                        marginBottom: 8,
+                        fontSize: 14 
+                      }]}>
+                        Derniers Achats
+                      </Text>
+                      {selectedItemDetails.purchases.slice(0, 3).map((purchase: any, index: number) => (
+                        <TouchableOpacity 
+                          key={index}
+                          style={{ 
+                            padding: 10, 
+                            backgroundColor: colors.backgroundAlt, 
+                            borderRadius: 8,
+                            marginBottom: 8,
+                            flexDirection: 'row',
+                            justifyContent: 'space-between',
+                            alignItems: 'center'
+                          }}
+                          onPress={() => {
+                            setIsDetailModalVisible(false);
+                            navigation.navigate('PurchaseDetail' as never, { purchaseId: purchase.id } as any);
+                          }}
+                        >
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ 
+                              fontWeight: 'bold',
+                              fontSize: 13 
+                            }}>
+                              {purchase.produits?.nom || purchase.nom}
+                            </Text>
+                            <Text style={[typography.small, { fontSize: 11 }]}>
+                              {new Date(purchase.date_commande).toLocaleDateString('fr-FR')}
+                            </Text>
+                          </View>
+                          <View style={{ alignItems: 'flex-end' }}>
+                            <Text style={[typography.small, { 
+                              color: colors.gold, 
+                              fontWeight: 'bold',
+                              fontSize: 11 
+                            }]}>
+                              {formatCurrency(purchase.montant_ttc || 0)}
+                            </Text>
+                            <Text style={[typography.small, { fontSize: 11 }]}>
+                              {purchase.quantite_recue} {purchase.unite_achat}
+                            </Text>
+                          </View>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  )}
+                  
+                  <TouchableOpacity 
+                    style={[globalStyles.buttonOutline, { 
+                      marginTop: 16,
+                      paddingVertical: 12 
+                    }]} 
+                    onPress={() => { 
+                      setIsDetailModalVisible(false); 
+                      navigation.navigate('PurchaseDetail' as never, { 
+                        prefilledSupplier: selectedItemDetails.name 
+                      } as any); 
+                    }}
+                  >
+                    <Text style={globalStyles.buttonTextOutline}>Voir tous les achats →</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+              
+              {/* Active Ingredient Details */}
+              {selectedItemDetails?.type === 'ingredient' && (
+                <View>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
+                    <View style={{ 
+                      width: 50, 
+                      height: 50, 
+                      borderRadius: 25, 
+                      backgroundColor: colors.gold + '20', 
+                      justifyContent: 'center', 
+                      alignItems: 'center', 
+                      marginRight: 12 
+                    }}>
+                      <Feather name="flask" size={24} color={colors.gold} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[typography.h3, { 
+                        color: colors.primary,
+                        fontSize: isSmallScreen ? 16 : 18 
+                      }]}>
+                        {selectedItemDetails.name}
+                      </Text>
+                      <Text style={[typography.body, { 
+                        color: colors.textSecondary,
+                        fontSize: 13 
+                      }]}>
+                        Utilisé dans {selectedItemDetails.productCount || 0} produits
+                      </Text>
+                    </View>
+                  </View>
+                  
+                  <View style={[globalStyles.card, { 
+                    padding: 12, 
+                    marginBottom: 16 
+                  }]}>
+                    <Text style={[typography.h4, { 
+                      color: colors.primary, 
+                      marginBottom: 8,
+                      fontSize: 14 
+                    }]}>
+                      Total Dépensé
+                    </Text>
+                    <Text style={[typography.h2, { 
+                      color: colors.gold, 
+                      textAlign: 'center',
+                      fontSize: isSmallScreen ? 20 : 24 
+                    }]}>
+                      {formatCurrency(selectedItemDetails.totalAmount || 0)}
+                    </Text>
+                  </View>
+                  
+                  {/* Related Products */}
+                  {selectedItemDetails?.relatedProducts?.length > 0 && (
+                    <View style={{ marginBottom: 16 }}>
+                      <Text style={[typography.h4, { 
+                        marginBottom: 8,
+                        fontSize: 14 
+                      }]}>
+                        Produits Associés
+                      </Text>
+                      {selectedItemDetails.relatedProducts.slice(0, 3).map((p: any) => (
+                        <View key={p.id} style={{ 
+                          marginBottom: 8, 
+                          padding: 10, 
+                          backgroundColor: colors.backgroundAlt, 
+                          borderRadius: 8 
+                        }}>
+                          <Text style={{ 
+                            fontWeight: 'bold', 
+                            color: colors.primary,
+                            fontSize: 13 
+                          }}>
+                            {p.nom}
+                          </Text>
+                          <Text style={[typography.small, { fontSize: 11 }]}>
+                            Type: {p.type_produit || 'Non spécifié'}
+                          </Text>
+                          <Text style={[typography.small, { fontSize: 11 }]}>
+                            Stock: {p.stock_actuel} {p.unite_reference} • {formatCurrency(p.prix_moyen || 0)}/u
+                          </Text>
+                          <TouchableOpacity 
+                            onPress={() => { 
+                              setIsDetailModalVisible(false); 
+                              navigation.navigate('Order' as never, { prefilledProduct: p.nom } as any); 
+                            }} 
+                            style={{ marginTop: 6 }}
+                          >
+                            <Text style={{ 
+                              color: colors.gold, 
+                              fontWeight: 'bold',
+                              fontSize: 12 
+                            }}>
+                              🛒 Commander ce produit
+                            </Text>
+                          </TouchableOpacity>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                  
+                  {/* Purchase History for this Ingredient */}
+                  {selectedItemDetails?.purchases?.length > 0 && (
+                    <View>
+                      <Text style={[typography.h4, { 
+                        marginBottom: 8,
+                        fontSize: 14 
+                      }]}>
+                        Achats Récents
+                      </Text>
+                      {selectedItemDetails.purchases.slice(0, 2).map((purchase: any, index: number) => (
+                        <View key={index} style={{ 
+                          padding: 10, 
+                          backgroundColor: colors.backgroundAlt, 
+                          borderRadius: 8,
+                          marginBottom: 8 
+                        }}>
+                          <Text style={{ 
+                            fontWeight: 'bold',
+                            fontSize: 13 
+                          }}>
+                            {purchase.produits?.nom || purchase.nom}
+                          </Text>
+                          <View style={{ 
+                            flexDirection: 'row', 
+                            justifyContent: 'space-between', 
+                            marginTop: 4 
+                          }}>
+                            <Text style={[typography.small, { fontSize: 11 }]}>
+                              {new Date(purchase.date_commande).toLocaleDateString('fr-FR')}
+                            </Text>
+                            <Text style={[typography.small, { 
+                              color: colors.gold, 
+                              fontWeight: 'bold',
+                              fontSize: 11 
+                            }]}>
+                              {formatCurrency(purchase.montant_ttc || 0)}
+                            </Text>
+                          </View>
+                          <Text style={[typography.small, { fontSize: 11 }]}>
+                            Fournisseur: {purchase.fournisseur || 'Inconnu'}
+                          </Text>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                </View>
+              )}
+              
+              <TouchableOpacity 
+                onPress={() => setIsDetailModalVisible(false)} 
+                style={{ 
+                  marginTop: 20, 
+                  alignSelf: 'center',
+                  padding: 10 
+                }}
+              >
+                <Text style={{ 
+                  color: colors.textSecondary, 
+                  fontWeight: '600',
+                  fontSize: 14 
+                }}>
+                  Fermer
+                </Text>
+              </TouchableOpacity>
             </View>
-
           </ScrollView>
         </View>
-      </TouchableWithoutFeedback>
-    </KeyboardAvoidingView>
+      </Modal>
+
+      <ScrollView 
+        ref={scrollViewRef}
+        style={{ flex: 1 }} 
+        contentContainerStyle={{ 
+          padding: isSmallScreen ? 12 : 16, 
+          paddingBottom: 32 
+        }}
+        refreshControl={
+          <RefreshControl 
+            refreshing={refreshing} 
+            onRefresh={onRefresh} 
+            colors={[colors.gold]} 
+          />
+        }
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        onScrollBeginDrag={() => Keyboard.dismiss()}
+        showsVerticalScrollIndicator={false}
+      >
+        
+        {/* Period Selection */}
+        <View style={[globalStyles.card, { 
+          marginBottom: 16, 
+          padding: 12,
+          borderRadius: 12 
+        }]}>
+          <View style={{ 
+            flexDirection: 'row', 
+            justifyContent: 'space-between', 
+            alignItems: 'center',
+            marginBottom: 12 
+          }}>
+            <Text style={[typography.h3, { 
+              color: colors.primary,
+              fontSize: isSmallScreen ? 16 : 18 
+            }]}>
+              Période d'analyse
+            </Text>
+            {growthData && (
+              <Text style={{ 
+                color: growthData.isPositive ? colors.success : colors.danger, 
+                fontWeight: '600',
+                fontSize: isSmallScreen ? 12 : 13 
+              }}>
+                {growthData.isPositive ? '▲' : '▼'} {Math.abs(growthData.value).toFixed(1)}% vs {selectedYear - 1}
+              </Text>
+            )}
+          </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            {[currentYear, currentYear - 1, currentYear - 2].map(year => (
+              <TouchableOpacity 
+                key={year} 
+                onPress={() => setSelectedYear(year)} 
+                style={{ 
+                  paddingHorizontal: 16, 
+                  paddingVertical: 10, 
+                  backgroundColor: selectedYear === year ? colors.primary : colors.backgroundAlt, 
+                  borderRadius: 10, 
+                  marginRight: 8, 
+                  borderWidth: 2, 
+                  borderColor: selectedYear === year ? colors.gold : colors.border,
+                  minWidth: 80,
+                  alignItems: 'center'
+                }}
+              >
+                <Text style={{ 
+                  color: selectedYear === year ? 'white' : colors.text, 
+                  fontWeight: '700',
+                  fontSize: isSmallScreen ? 14 : 15 
+                }}>
+                  {year}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+
+        {/* Metrics */}
+        <View style={{ 
+          flexDirection: 'row', 
+          flexWrap: 'wrap', 
+          justifyContent: 'space-between', 
+          marginBottom: 16 
+        }}>
+           {[
+             { key: 'spending', label: 'Dépenses', icon: 'dollar-sign', value: formatCurrency(totalSpent), color: colors.primary },
+             { key: 'orders', label: 'Commandes', icon: 'shopping-cart', value: totalOrders, color: colors.secondary },
+             { key: 'avg', label: 'Moyenne', icon: 'trending-up', value: formatCurrency(monthlyAvg), color: colors.gold }
+           ].map(m => (
+             <View 
+               key={m.key} 
+               style={[globalStyles.metricCard, { 
+                 width: isSmallScreen ? '31%' : '32%', 
+                 marginBottom: 8,
+                 padding: 10,
+                 borderRadius: 10
+               }]}
+             >
+                <Text style={[typography.small, { 
+                  color: colors.textSecondary,
+                  fontSize: isSmallScreen ? 10 : 11,
+                  marginBottom: 4 
+                }]}>
+                  {m.label}
+                </Text>
+                <Text style={{ 
+                  color: m.color, 
+                  fontWeight: '700', 
+                  fontSize: isSmallScreen ? 13 : 14 
+                }}>
+                  {m.value}
+                </Text>
+             </View>
+           ))}
+        </View>
+
+        {/* Financial Trend Chart */}
+        <View style={[globalStyles.card, { 
+          marginBottom: 16, 
+          padding: 12,
+          borderRadius: 12 
+        }]}>
+          <View style={{ 
+            flexDirection: 'row', 
+            justifyContent: 'space-between', 
+            alignItems: 'center', 
+            marginBottom: 12,
+            flexWrap: 'wrap' 
+          }}>
+            <Text style={[typography.h3, { 
+              color: colors.primary, 
+              marginBottom: isSmallScreen ? 8 : 0,
+              fontSize: isSmallScreen ? 16 : 18 
+            }]}>
+              📈 Évolution Mensuelle
+            </Text>
+            <View style={{ 
+              flexDirection: 'row', 
+              backgroundColor: colors.backgroundAlt, 
+              borderRadius: 10, 
+              padding: 2,
+              marginTop: isSmallScreen ? 4 : 0 
+            }}>
+              {[
+                { key: 'spending', label: 'Dépenses' },
+                { key: 'orders', label: 'Commandes' },
+                { key: 'avg', label: 'Moy. cmd' }
+              ].map(metric => (
+                <TouchableOpacity
+                  key={metric.key}
+                  onPress={() => setSelectedMetric(metric.key as 'spending' | 'orders' | 'avg')}
+                  style={{
+                    paddingVertical: 6,
+                    paddingHorizontal: 8,
+                    borderRadius: 8,
+                    backgroundColor: selectedMetric === metric.key ? colors.primary : 'transparent',
+                    minWidth: 70,
+                    alignItems: 'center'
+                  }}
+                >
+                  <Text style={{ 
+                    color: selectedMetric === metric.key ? 'white' : colors.textSecondary, 
+                    fontSize: isSmallScreen ? 10 : 11, 
+                    fontWeight: '600' 
+                  }}>
+                    {metric.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+
+          <ScrollView 
+            horizontal 
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{ paddingRight: 20 }}
+          >
+            <View style={{ 
+              flexDirection: 'row', 
+              height: 130, 
+              alignItems: 'flex-end', 
+              paddingBottom: 8 
+            }}>
+              {monthlyData.map((m, i) => {
+                const value = chartValues[i] || 0
+                const barHeight = maxChartValue > 0 ? Math.max(6, (value / maxChartValue) * 90) : 6
+                const isSelected = selectedMonth === m.month
+                const monthIndex = parseInt(m.month.split('-')[1], 10) - 1
+                const label = monthLabels[monthIndex] || m.month.split('-')[1]
+
+                return (
+                  <TouchableOpacity
+                    key={m.month}
+                    onPress={() => setSelectedMonth(m.month)}
+                    activeOpacity={0.7}
+                    style={{ 
+                      width: isSmallScreen ? 30 : 36, 
+                      marginHorizontal: 4, 
+                      alignItems: 'center' 
+                    }}
+                  >
+                    <View style={{
+                      height: barHeight,
+                      width: isSmallScreen ? 14 : 16,
+                      borderRadius: 5,
+                      backgroundColor: isSelected ? colors.gold : colors.primary,
+                      opacity: value === 0 ? 0.3 : 1
+                    }} />
+                    <Text style={{ 
+                      fontSize: 9, 
+                      marginTop: 6, 
+                      color: isSelected ? colors.primary : colors.textSecondary 
+                    }}>
+                      {label}
+                    </Text>
+                  </TouchableOpacity>
+                )
+              })}
+            </View>
+          </ScrollView>
+
+          {selectedMonthData ? (
+            <View style={{ 
+              marginTop: 12, 
+              padding: 10, 
+              backgroundColor: colors.backgroundAlt, 
+              borderRadius: 10, 
+              borderWidth: 1, 
+              borderColor: colors.border 
+            }}>
+              <Text style={[typography.caption, { 
+                marginBottom: 6,
+                fontSize: 12 
+              }]}>
+                {selectedMonthLabel}
+              </Text>
+              <View style={{ 
+                flexDirection: isSmallScreen ? 'column' : 'row', 
+                justifyContent: 'space-between' 
+              }}>
+                <View style={{ marginBottom: isSmallScreen ? 8 : 0 }}>
+                  <Text style={[typography.small, { fontSize: 11 }]}>Dépenses</Text>
+                  <Text style={[typography.h4, { 
+                    color: colors.primary,
+                    fontSize: isSmallScreen ? 16 : 18 
+                  }]}>
+                    {formatCurrency(selectedMonthData.amount)}
+                  </Text>
+                </View>
+                <View style={{ alignItems: isSmallScreen ? 'flex-start' : 'flex-end' }}>
+                  <Text style={[typography.small, { fontSize: 11 }]}>Commandes</Text>
+                  <Text style={[typography.h4, { 
+                    color: colors.secondary,
+                    fontSize: isSmallScreen ? 16 : 18 
+                  }]}>
+                    {selectedMonthData.orders}
+                  </Text>
+                </View>
+              </View>
+              {selectedMetricValue !== null && (
+                <View style={{ 
+                  marginTop: 8, 
+                  flexDirection: 'row', 
+                  justifyContent: 'space-between',
+                  borderTopWidth: 1,
+                  borderTopColor: colors.borderAlt,
+                  paddingTop: 8
+                }}>
+                  <Text style={[typography.small, { fontSize: 11 }]}>Indicateur sélectionné</Text>
+                  <Text style={[typography.small, { 
+                    color: colors.textSecondary,
+                    fontSize: 11,
+                    fontWeight: '600' 
+                  }]}>
+                    {formatMetricValue(selectedMetricValue)}
+                  </Text>
+                </View>
+              )}
+              {selectedMonthData.previousYearAmount !== undefined && selectedMonthData.previousYearAmount > 0 && (
+                <View style={{ 
+                  marginTop: 6, 
+                  flexDirection: 'row', 
+                  justifyContent: 'space-between' 
+                }}>
+                  <Text style={[typography.small, { fontSize: 11 }]}>Année précédente</Text>
+                  <Text style={[typography.small, { 
+                    color: colors.textSecondary,
+                    fontSize: 11 
+                  }]}>
+                    {formatCurrency(selectedMonthData.previousYearAmount)}
+                  </Text>
+                </View>
+              )}
+            </View>
+          ) : (
+            <Text style={[typography.small, { 
+              textAlign: 'center', 
+              color: colors.textSecondary, 
+              marginTop: 8,
+              fontSize: 11 
+            }]}>
+              Appuyez sur un mois pour afficher le détail
+            </Text>
+          )}
+        </View>
+
+        {/* Top Expenses */}
+        <View style={{ 
+          flexDirection: isSmallScreen ? 'column' : 'row', 
+          justifyContent: 'space-between', 
+          marginBottom: 16 
+        }}>
+            <View style={[globalStyles.card, { 
+              flex: 1, 
+              marginRight: isSmallScreen ? 0 : 8, 
+              marginBottom: isSmallScreen ? 8 : 0, 
+              padding: 10,
+              borderRadius: 10 
+            }]}>
+              <Text style={[typography.body, { 
+                fontWeight: '600', 
+                marginBottom: 8,
+                fontSize: 14,
+                color: colors.primary 
+              }]}>
+                Produits Top
+              </Text>
+              {topProducts.slice(0, 3).map((p, i) => (
+                <TouchableOpacity 
+                  key={i} 
+                  onPress={() => {
+                    const productPurchases = allPurchases?.filter(pur => pur.produit_id === p.id) || []
+                    setSelectedItemDetails({
+                      ...p,
+                      type: 'product',
+                      purchases: productPurchases
+                    })
+                    setIsDetailModalVisible(true)
+                  }}
+                  style={{ marginBottom: 4 }}
+                >
+                  <Text style={[typography.caption, { 
+                    color: colors.primary,
+                    fontSize: 12 
+                  }]} numberOfLines={1}>
+                    • {p.name}: {formatCurrency(p.amount)}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <View style={[globalStyles.card, { 
+              flex: 1, 
+              marginLeft: isSmallScreen ? 0 : 8, 
+              padding: 10,
+              borderRadius: 10 
+            }]}>
+              <Text style={[typography.body, { 
+                fontWeight: '600', 
+                marginBottom: 8,
+                fontSize: 14,
+                color: colors.secondary 
+              }]}>
+                Fournisseurs Top
+              </Text>
+              {topSuppliers.slice(0, 3).map((s, i) => (
+                <TouchableOpacity 
+                  key={i} 
+                  onPress={() => {
+                    const supplierPurchases = allPurchases?.filter(pur => pur.fournisseur === s.name) || []
+                    setSelectedItemDetails({
+                      name: s.name,
+                      type: 'supplier',
+                      purchases: supplierPurchases,
+                      orderCount: s.orderCount,
+                      totalAmount: s.amount
+                    })
+                    setIsDetailModalVisible(true)
+                  }}
+                  style={{ marginBottom: 4 }}
+                >
+                  <Text style={[typography.caption, { 
+                    color: colors.secondary,
+                    fontSize: 12 
+                  }]} numberOfLines={1}>
+                    • {s.name}: {formatCurrency(s.amount)}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+        </View>
+
+        {/* Product Distribution */}
+        {productTypes.length > 0 && (
+          <View style={[globalStyles.card, { 
+            marginBottom: 16, 
+            padding: 12,
+            borderRadius: 12 
+          }]}>
+            <Text style={[typography.h3, { 
+              color: colors.primary, 
+              marginBottom: 12,
+              fontSize: isSmallScreen ? 16 : 18 
+            }]}>
+              🏷️ Répartition par Type
+            </Text>
+            {productTypes.map((t, i) => (
+              <View key={i} style={{ marginBottom: 8 }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                  <Text style={[typography.small, { fontSize: 12 }]}>{t.type}</Text>
+                  <Text style={[typography.small, { 
+                    fontWeight: 'bold',
+                    fontSize: 12 
+                  }]}>
+                    {formatCurrency(t.amount)}
+                  </Text>
+                </View>
+                <View style={{ 
+                  height: 6, 
+                  backgroundColor: colors.borderAlt, 
+                  borderRadius: 3, 
+                  marginTop: 4 
+                }}>
+                  <View style={{ 
+                    width: totalSpent > 0 ? `${(t.amount/totalSpent)*100}%` : '0%', 
+                    height: '100%', 
+                    backgroundColor: colors.gold, 
+                    borderRadius: 3 
+                  }} />
+                </View>
+              </View>
+            ))}
+          </View>
+        )}
+
+        {/* Parcel Costs Table */}
+        <View style={[globalStyles.cardLuxury, { 
+          marginBottom: 24,
+          borderRadius: 12,
+          padding: 12 
+        }]}>
+          <View style={{ 
+            flexDirection: 'row', 
+            justifyContent: 'space-between', 
+            alignItems: 'center', 
+            marginBottom: 12 
+          }}>
+            <Text style={[typography.h2, { 
+              color: colors.primary,
+              fontSize: isSmallScreen ? 16 : 18 
+            }]}>
+              🚜 Coût par Parcelle
+            </Text>
+            <TouchableOpacity onPress={() => navigation.navigate('History' as never)}>
+              <Text style={{ 
+                color: colors.primary, 
+                fontSize: 11, 
+                fontWeight: '600' 
+              }}>
+                Voir l'historique →
+              </Text>
+            </TouchableOpacity>
+          </View>
+          {parcelStats.length > 0 ? (
+            parcelStats.map((parcel, index) => (
+              <TouchableOpacity
+                key={index}
+                onPress={() => navigation.navigate('History' as never, { parcelle: parcel.name } as any)}
+                style={{ 
+                  flexDirection: 'row', 
+                  justifyContent: 'space-between', 
+                  paddingVertical: 10, 
+                  borderBottomWidth: index < parcelStats.length - 1 ? 1 : 0, 
+                  borderBottomColor: colors.borderAlt 
+                }}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={{ 
+                    fontWeight: '600',
+                    fontSize: 13 
+                  }}>
+                    {parcel.name}
+                  </Text>
+                  <Text style={[typography.small, { fontSize: 11 }]}>
+                    {parcel.surface.toFixed(2)} ha
+                  </Text>
+                </View>
+                <View style={{ alignItems: 'flex-end' }}>
+                   <Text style={{ 
+                     color: colors.primary, 
+                     fontWeight: '700',
+                     fontSize: 13 
+                   }}>
+                     {formatCurrency(parcel.cost)}
+                   </Text>
+                   <Text style={{ 
+                     color: colors.gold, 
+                     fontSize: 10 
+                   }}>
+                     {formatCurrency(parcel.costPerHa)}/ha
+                   </Text>
+                </View>
+              </TouchableOpacity>
+            ))
+          ) : (
+            <Text style={{ 
+              textAlign: 'center', 
+              color: colors.textSecondary, 
+              padding: 20,
+              fontSize: 13 
+            }}>
+              Aucune donnée disponible
+            </Text>
+          )}
+        </View>
+
+      </ScrollView>
+      
+      <Sidebar isVisible={sidebarVisible} onClose={() => setSidebarVisible(false)} />
+    </View>
   )
 }

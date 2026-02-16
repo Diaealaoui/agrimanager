@@ -1,13 +1,18 @@
-import React, { useState, useEffect } from 'react'
-import { View, Text, ScrollView, TextInput, TouchableOpacity, Alert } from 'react-native'
-import { Picker } from '@react-native-picker/picker'
+import React, { useState, useEffect, useRef } from 'react'
+import { View, Text, ScrollView, TextInput, TouchableOpacity, Alert, Keyboard, TouchableWithoutFeedback, Platform } from 'react-native'
 import * as Print from 'expo-print'
 import * as Sharing from 'expo-sharing'
 import { useAuth } from '../../hooks/useAuth'
 import Database from '../../lib/database'
+import Sidebar from '../../components/layout/Sidebar'
 import { globalStyles, typography, colors, shadows } from '../../utils/styles'
 
-export default function OrderScreen() {
+type OrderScreenProps = {
+  route?: { params?: { prefilledProduct?: string } }
+  prefilledProduct?: string
+}
+
+export default function OrderScreen({ route, prefilledProduct }: OrderScreenProps) {
   const { user } = useAuth()
   const [products, setProducts] = useState<any[]>([])
   const [orderItems, setOrderItems] = useState<any[]>([])
@@ -18,21 +23,47 @@ export default function OrderScreen() {
   const [quantity, setQuantity] = useState('')
   const [unit, setUnit] = useState('')
   const [loading, setLoading] = useState(false)
+  const [sidebarVisible, setSidebarVisible] = useState(false)
+  const [showSuggestions, setShowSuggestions] = useState(false)
+  const [suggestions, setSuggestions] = useState<any[]>([])
+  const [keyboardVisible, setKeyboardVisible] = useState(false)
+  
+  const quantityInputRef = useRef<TextInput>(null)
+  const unitInputRef = useRef<TextInput>(null)
+  const scrollViewRef = useRef<ScrollView>(null)
+  const prefilledValue = route?.params?.prefilledProduct ?? prefilledProduct ?? ''
 
   useEffect(() => {
-    if (user) {
-      loadProducts()
-    }
+    const keyboardDidShowListener = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      () => setKeyboardVisible(true)
+    );
+    const keyboardDidHideListener = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      () => setKeyboardVisible(false)
+    );
+    return () => {
+      keyboardDidShowListener.remove();
+      keyboardDidHideListener.remove();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (user) { loadProducts() }
   }, [user])
   
+  useEffect(() => {
+    if (prefilledValue) {
+      setSelectedProduct(prefilledValue)
+    }
+  }, [prefilledValue])
+
   const loadProducts = async () => {
     if (!user) return
-    
     setLoading(true)
     try {
       const prods = await Database.obtenirProduits(user.id)
       setProducts(prods)
-      
       const farmName = await Database.getFarmName(user.id)
       setFournisseur(farmName)
     } catch (error) {
@@ -42,36 +73,66 @@ export default function OrderScreen() {
     }
   }
 
+  const handleProductSearch = (text: string) => {
+    setSelectedProduct(text)
+    if (text.length > 0) {
+      const filtered = products.filter(p => 
+        p.nom.toLowerCase().includes(text.toLowerCase()) ||
+        (p.matiere_active && p.matiere_active.toLowerCase().includes(text.toLowerCase())) ||
+        (p.type_produit && p.type_produit.toLowerCase().includes(text.toLowerCase()))
+      )
+      setSuggestions(filtered)
+      setShowSuggestions(filtered.length > 0)
+    } else {
+      setShowSuggestions(false)
+    }
+  }
+
+  const selectProduct = (product: any) => {
+    setSelectedProduct(product.nom)
+    setUnit(product.unite_reference || '')
+    setShowSuggestions(false)
+    Keyboard.dismiss()
+    setTimeout(() => quantityInputRef.current?.focus(), 100)
+  }
+
   const addOrderItem = () => {
-    if (!selectedProduct || !quantity || parseFloat(quantity) <= 0) {
-      Alert.alert('Erreur', 'Veuillez sélectionner un produit et saisir une quantité')
+    if (!selectedProduct.trim() || !quantity || parseFloat(quantity) <= 0) {
+      Alert.alert('Erreur', 'Veuillez saisir un produit et une quantité valide')
       return
     }
 
-    const product = products.find(p => p.nom === selectedProduct)
-    if (!product) return
-
+    const product = products.find(p => p.nom.toLowerCase() === selectedProduct.toLowerCase())
     const newItem = {
       id: Date.now().toString(),
-      nom: selectedProduct,
+      nom: selectedProduct, 
       qty: parseFloat(quantity),
-      unit: unit || product.unite_reference || '',
-      product_id: product.id,
+      unit: unit || (product?.unite_reference || ''),
+      product_id: product?.id || null,
     }
 
     setOrderItems([...orderItems, newItem])
     setSelectedProduct('')
     setQuantity('')
     setUnit('')
-  }
-
-  const removeOrderItem = (id: string) => {
-    setOrderItems(orderItems.filter(item => item.id !== id))
+    setShowSuggestions(false)
+    Keyboard.dismiss()
+    
+    // Scroll to bottom to show added item
+    setTimeout(() => {
+      scrollViewRef.current?.scrollToEnd({ animated: true })
+    }, 100)
   }
 
   const clearOrder = () => {
     setOrderItems([])
+    setFournisseur('')
     setNotes('')
+    setDateCommande(new Date().toISOString().split('T')[0])
+  }
+
+  const removeOrderItem = (id: string) => {
+    setOrderItems(orderItems.filter(i => i.id !== id))
   }
 
   const generatePDF = async () => {
@@ -97,305 +158,173 @@ export default function OrderScreen() {
         <head>
           <meta charset="UTF-8">
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Bon de Commande - ${orderRef}</title>
           <style>
-            * {
-              margin: 0;
-              padding: 0;
-              box-sizing: border-box;
-            }
+            @page { margin: 20mm; }
+            * { margin: 0; padding: 0; box-sizing: border-box; }
             body { 
-              font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-              padding: 40px;
-              color: #1a1a2e;
-              line-height: 1.6;
-              background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
+              font-family: 'Helvetica', 'Arial', sans-serif;
+              color: #2d3436;
+              line-height: 1.3;
+              font-size: 11px;
+              height: 100%;
             }
+            /* Header Section */
             .header { 
-              text-align: center;
-              margin-bottom: 40px;
-              padding: 30px;
-              background: linear-gradient(135deg, #1a1a2e 0%, #2d3561 100%);
-              border-radius: 20px;
-              box-shadow: 0 10px 30px rgba(26, 26, 46, 0.3);
+              display: flex;
+              justify-content: space-between;
+              align-items: flex-start;
+              margin-bottom: 15px;
+              padding-bottom: 10px;
+              border-bottom: 2px solid #2e7d32;
             }
             .title { 
-              color: #d4af37;
-              font-size: 36px;
+              color: #1b5e20;
+              font-size: 20px;
               font-weight: bold;
-              margin-bottom: 12px;
-              text-transform: uppercase;
-              letter-spacing: 3px;
-              text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
             }
             .subtitle { 
-              color: rgba(255, 255, 255, 0.9);
-              font-size: 18px;
-              font-weight: 500;
-              letter-spacing: 1px;
-            }
-            .logo-placeholder {
-              width: 80px;
-              height: 80px;
-              margin: 0 auto 20px;
-              background: linear-gradient(135deg, #d4af37 0%, #f4e5c2 100%);
-              border-radius: 50%;
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              font-size: 40px;
-              box-shadow: 0 5px 15px rgba(212, 175, 55, 0.4);
-            }
-            .info-section {
-              background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
-              padding: 25px;
-              border-radius: 15px;
-              margin-bottom: 30px;
-              border-left: 5px solid #d4af37;
-              box-shadow: 0 4px 15px rgba(0,0,0,0.08);
-            }
-            .info-row { 
-              display: flex;
-              margin-bottom: 12px;
-              align-items: center;
-            }
-            .info-label { 
-              font-weight: 700;
-              width: 180px;
-              color: #1a1a2e;
-              letter-spacing: 0.5px;
-            }
-            .info-value {
-              color: #2d3561;
+              color: #4caf50;
+              font-size: 13px;
               font-weight: 600;
             }
-            .order-ref {
-              background: linear-gradient(135deg, #f4e5c2 0%, #d4af37 100%);
-              color: #1a1a2e;
-              padding: 10px 20px;
-              border-radius: 8px;
-              font-weight: bold;
-              display: inline-block;
-              border: 2px solid #d4af37;
-              box-shadow: 0 3px 10px rgba(212, 175, 55, 0.3);
-              letter-spacing: 1px;
+            
+            /* Info Bar */
+            .info-grid {
+              display: flex;
+              justify-content: space-between;
+              margin-bottom: 15px;
+              background: #f1f8e9;
+              padding: 10px 15px;
+              border-radius: 4px;
             }
-            .table-container {
-              margin: 30px 0;
-              border-radius: 15px;
-              overflow: hidden;
-              box-shadow: 0 8px 25px rgba(0,0,0,0.1);
-            }
+            .info-label { font-weight: bold; color: #33691e; }
+            
+            /* Table Styling */
             .table { 
               width: 100%;
               border-collapse: collapse;
-            }
-            .table thead {
-              background: linear-gradient(135deg, #1a1a2e 0%, #2d3561 100%);
+              margin-bottom: 10px;
             }
             .table th { 
-              padding: 18px;
+              background-color: #2e7d32;
+              color: white;
+              padding: 8px;
               text-align: left;
-              font-weight: 700;
+              font-size: 10px;
               text-transform: uppercase;
-              font-size: 12px;
-              letter-spacing: 1.2px;
-              color: #d4af37;
-              border-bottom: 3px solid #d4af37;
             }
             .table td { 
-              padding: 16px 18px;
-              border-bottom: 1px solid #e2e8f0;
-              background: white;
+              padding: 6px 8px;
+              border-bottom: 1px solid #c8e6c9;
             }
-            .table tbody tr:nth-child(even) td {
-              background: #f8fafc;
-            }
-            .table tbody tr:hover td {
-              background: #f4e5c2;
-            }
-            .table tbody tr:last-child td {
-              border-bottom: none;
-            }
-            .table .row-number {
-              width: 60px;
-              text-align: center;
-              font-weight: 700;
-              color: #d4af37;
-              font-size: 16px;
-            }
-            .total-section { 
+            .table tr:nth-child(even) { background-color: #fafafa; }
+            
+            .total-row {
               text-align: right;
-              margin-top: 30px;
-              padding: 25px;
-              background: linear-gradient(135deg, #f4e5c2 0%, #ffffff 100%);
-              border-radius: 15px;
-              border: 2px solid #d4af37;
-              box-shadow: 0 5px 20px rgba(212, 175, 55, 0.2);
-            }
-            .total-label {
-              font-size: 18px;
-              font-weight: 700;
-              color: #1a1a2e;
-              letter-spacing: 1px;
-            }
-            .total-value {
-              font-size: 28px;
+              padding: 10px;
               font-weight: bold;
-              color: #d4af37;
-              margin-top: 8px;
-              text-shadow: 1px 1px 2px rgba(0,0,0,0.1);
+              color: #1b5e20;
+              border-top: 1px solid #2e7d32;
             }
+            
             .notes { 
-              margin-top: 30px;
-              padding: 25px;
-              background: linear-gradient(135deg, #fff8e1 0%, #ffffff 100%);
-              border-left: 5px solid #f59e0b;
-              border-radius: 12px;
-              box-shadow: 0 4px 15px rgba(245, 158, 11, 0.1);
+              margin-top: 10px;
+              padding: 8px;
+              border: 1px solid #e0e0e0;
+              border-left: 3px solid #81c784;
+              background-color: #fff;
             }
-            .notes-title {
-              font-weight: bold;
-              color: #92400e;
-              margin-bottom: 12px;
-              font-size: 16px;
-              letter-spacing: 0.5px;
-            }
-            .notes-content {
-              color: #78350f;
-              line-height: 1.8;
+
+            /* Push Signatures to bottom */
+            .bottom-container {
+              position: absolute;
+              bottom: 40px;
+              left: 0;
+              right: 0;
+              width: 100%;
             }
             .signature-section {
-              margin-top: 60px;
               display: flex;
               justify-content: space-between;
-              gap: 40px;
+              margin-bottom: 30px;
             }
             .signature-box {
-              flex: 1;
-              border-top: 2px solid #1a1a2e;
-              padding-top: 10px;
-            }
-            .signature-label {
-              font-weight: 600;
-              color: #1a1a2e;
-              margin-bottom: 40px;
+              width: 40%;
+              border-top: 1.5px solid #2e7d32;
+              padding-top: 5px;
+              text-align: center;
+              font-size: 10px;
+              color: #1b5e20;
+              font-weight: bold;
             }
             .footer { 
-              margin-top: 60px;
-              padding-top: 25px;
-              border-top: 3px solid #d4af37;
               text-align: center;
-              color: #64748b;
-              font-size: 12px;
-            }
-            .footer p {
-              margin: 5px 0;
-            }
-            .footer .company {
-              font-weight: 700;
-              color: #d4af37;
-              font-size: 16px;
-              letter-spacing: 1px;
-            }
-            .footer .tagline {
-              color: #1a1a2e;
-              font-style: italic;
-              margin-top: 10px;
-            }
-            @media print {
-              body {
-                padding: 20px;
-                background: white;
-              }
+              font-size: 8px;
+              color: #9e9e9e;
+              border-top: 1px solid #eee;
+              padding-top: 10px;
             }
           </style>
         </head>
         <body>
           <div class="header">
-            <div class="logo-placeholder">🌾</div>
-            <div class="title">📋 BON DE COMMANDE</div>
-            <div class="subtitle">${farmName}</div>
-          </div>
-          
-          <div class="info-section">
-            <div class="info-row">
-              <span class="info-label">Référence:</span>
-              <span class="order-ref">${orderRef}</span>
+            <div>
+              <div class="title">🌿 BON DE COMMANDE</div>
+              <div class="subtitle">${farmName}</div>
             </div>
-            <div class="info-row">
-              <span class="info-label">Fournisseur:</span>
-              <span class="info-value">${fournisseur}</span>
-            </div>
-            <div class="info-row">
-              <span class="info-label">Date de commande:</span>
-              <span class="info-value">${new Date(dateCommande).toLocaleDateString('fr-FR', { 
-                weekday: 'long', 
-                year: 'numeric', 
-                month: 'long', 
-                day: 'numeric' 
-              })}</span>
+            <div style="text-align: right;">
+              <div style="font-weight: bold; color: #1b5e20;">N° ${orderRef}</div>
+              <div>Le: ${new Date(dateCommande).toLocaleDateString('fr-FR')}</div>
             </div>
           </div>
           
-          <div class="table-container">
-            <table class="table">
-              <thead>
+          <div class="info-grid">
+            <div><span class="info-label">Fournisseur:</span> ${fournisseur}</div>
+            <div><span class="info-label">Destination:</span> Exploitation Agricole</div>
+          </div>
+          
+          <table class="table">
+            <thead>
+              <tr>
+                <th style="width: 30px;">#</th>
+                <th>Désignation</th>
+                <th style="text-align: center; width: 80px;">Qté</th>
+                <th style="width: 70px;">Unité</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${orderItems.map((item, index) => `
                 <tr>
-                  <th class="row-number">N°</th>
-                  <th>Produit</th>
-                  <th style="text-align: right;">Quantité</th>
-                  <th>Unité</th>
+                  <td>${index + 1}</td>
+                  <td style="font-weight: 500;">${item.nom}</td>
+                  <td style="text-align: center; font-weight: bold; color: #2e7d32;">${item.qty}</td>
+                  <td>${item.unit}</td>
                 </tr>
-              </thead>
-              <tbody>
-                ${orderItems.map((item, index) => `
-                  <tr>
-                    <td class="row-number">${index + 1}</td>
-                    <td style="font-weight: 600; color: #1a1a2e;">${item.nom}</td>
-                    <td style="text-align: right; font-weight: 700; color: #d4af37; font-size: 16px;">${item.qty}</td>
-                    <td style="color: #64748b;">${item.unit}</td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
-          </div>
+              `).join('')}
+            </tbody>
+          </table>
           
-          <div class="total-section">
-            <div class="total-label">Total Articles Commandés</div>
-            <div class="total-value">${orderItems.length} produit${orderItems.length > 1 ? 's' : ''}</div>
+          <div class="total-row">
+            Nombre d'articles: ${orderItems.length}
           </div>
           
           ${notes ? `
             <div class="notes">
-              <div class="notes-title">📝 Notes Complémentaires:</div>
-              <div class="notes-content">${notes.replace(/\n/g, '<br>')}</div>
+              <div style="font-weight: bold; font-size: 9px; margin-bottom: 3px;">Note livraison:</div>
+              <div style="font-size: 10px; color: #555;">${notes.replace(/\n/g, '<br>')}</div>
             </div>
           ` : ''}
-          
-          <div class="signature-section">
-            <div class="signature-box">
-              <div class="signature-label">Signature du Client</div>
-              <div style="height: 60px;"></div>
-              <div style="font-size: 10px; color: #94a3b8;">Date: _______________</div>
+
+          <div class="bottom-container">
+            <div class="signature-section">
+              <div class="signature-box">Signature Client</div>
+              <div class="signature-box">Signature Fournisseur</div>
             </div>
-            <div class="signature-box">
-              <div class="signature-label">Signature du Fournisseur</div>
-              <div style="height: 60px;"></div>
-              <div style="font-size: 10px; color: #94a3b8;">Date: _______________</div>
+            
+            <div class="footer">
+              AgriManager Pro - Logiciel de Gestion d'Exploitation<br>
+              Généré le ${new Date().toLocaleDateString('fr-FR')} - Document Officiel
             </div>
-          </div>
-          
-          <div class="footer">
-            <p style="font-size: 11px; color: #94a3b8;">
-              Document généré le ${new Date().toLocaleDateString('fr-FR')} à ${new Date().toLocaleTimeString('fr-FR')}
-            </p>
-            <p class="company">AgriManager Pro</p>
-            <p class="tagline">Gestion d'exploitation simplifiée</p>
-            <p style="margin-top: 20px; color: #64748b; font-size: 10px;">
-              Ce bon de commande est à conserver pour vos archives.<br>
-              Valable jusqu'au ${new Date(new Date().setDate(new Date().getDate() + 30)).toLocaleDateString('fr-FR')}
-            </p>
           </div>
         </body>
         </html>
@@ -414,13 +343,8 @@ export default function OrderScreen() {
       
       Alert.alert(
         'Succès',
-        'Le bon de commande a été généré avec succès !',
-        [
-          {
-            text: 'OK',
-            onPress: () => clearOrder()
-          }
-        ]
+        'Le bon de commande a été généré.',
+        [{ text: 'OK', onPress: () => clearOrder() }]
       )
       
     } catch (error) {
@@ -431,207 +355,233 @@ export default function OrderScreen() {
     }
   }
 
-  return (
-    <View style={{ flex: 1, backgroundColor: colors.background }}>
-      {/* Luxurious Header */}
-      <View style={{
-        backgroundColor: colors.primary,
-        padding: 24,
-        paddingTop: 60,
-        borderBottomLeftRadius: 30,
-        borderBottomRightRadius: 30,
-        ...shadows.xl,
-      }}>
-        <Text style={[typography.h1, { color: colors.gold, marginBottom: 4 }]}>
-          📄 Bon de Commande
-        </Text>
-        <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 14 }}>
-          Générez vos bons de commande professionnels
-        </Text>
-      </View>
-      
-      <ScrollView style={{ flex: 1, padding: 20 }}>
-        {/* Order Header */}
-        <View style={[globalStyles.cardLuxury, { marginBottom: 20 }]}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
-            <Text style={{ fontSize: 24, marginRight: 8 }}>📋</Text>
-            <Text style={[typography.h3, { color: colors.primary }]}>Informations de Commande</Text>
-          </View>
-          
-          <Text style={[typography.caption, { marginBottom: 8, color: colors.text, fontWeight: '600' }]}>
-            Fournisseur *
-          </Text>
-          <TextInput
-            style={[globalStyles.input, { marginBottom: 16 }]}
-            placeholder="Nom du fournisseur"
-            value={fournisseur}
-            onChangeText={setFournisseur}
-            placeholderTextColor={colors.textLight}
-          />
-          
-          <Text style={[typography.caption, { marginBottom: 8, color: colors.text, fontWeight: '600' }]}>
-            Date de Commande *
-          </Text>
-          <TextInput
-            style={[globalStyles.input, { marginBottom: 16 }]}
-            value={dateCommande}
-            onChangeText={setDateCommande}
-            placeholder="AAAA-MM-JJ"
-            placeholderTextColor={colors.textLight}
-          />
-          
-          <Text style={[typography.caption, { marginBottom: 8, color: colors.text, fontWeight: '600' }]}>
-            Notes (Optionnel)
-          </Text>
-          <TextInput
-            style={[globalStyles.input, { minHeight: 100, textAlignVertical: 'top' }]}
-            placeholder="Informations supplémentaires, conditions de livraison, etc..."
-            value={notes}
-            onChangeText={setNotes}
-            multiline
-            numberOfLines={4}
-            placeholderTextColor={colors.textLight}
-          />
-        </View>
+  const handleDismissKeyboard = () => {
+    Keyboard.dismiss()
+    setShowSuggestions(false)
+  }
 
-        {/* Add Product */}
-        <View style={[globalStyles.card, { marginBottom: 20 }]}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
-            <Text style={{ fontSize: 24, marginRight: 8 }}>📦</Text>
-            <Text style={[typography.h3, { color: colors.primary }]}>Ajouter un Produit</Text>
+  return (
+    <TouchableWithoutFeedback onPress={handleDismissKeyboard}>
+      <View style={{ flex: 1, backgroundColor: colors.background }}>
+        
+        {/* Header */}
+        <View style={{
+          backgroundColor: colors.primary,
+          padding: 24, paddingBottom: 32, paddingTop: 60,
+          borderBottomLeftRadius: 30, borderBottomRightRadius: 30,
+          ...shadows.xl, zIndex: 10,
+        }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <TouchableOpacity onPress={() => setSidebarVisible(true)} style={{ marginRight: 12 }}>
+              <Text style={{ color: 'white', fontSize: 24 }}>☰</Text>
+            </TouchableOpacity>
+            <View style={{ flex: 1 }}>
+              <Text style={[typography.h1, { color: colors.gold, marginBottom: 4 }]}>📄 Bon de Commande</Text>
+              <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 14 }}>Générez vos bons de commande professionnels</Text>
+            </View>
           </View>
-          
-          <Text style={[typography.caption, { marginBottom: 8, color: colors.text, fontWeight: '600' }]}>
-            Produit *
-          </Text>
-          <View style={{ 
-            backgroundColor: colors.backgroundAlt, 
-            borderRadius: 12, 
-            borderWidth: 2, 
-            borderColor: colors.border,
-            marginBottom: 16,
-          }}>
-            <Picker
-              selectedValue={selectedProduct}
-              onValueChange={(value) => {
-                setSelectedProduct(value)
-                const product = products.find(p => p.nom === value)
-                if (product) {
-                  setUnit(product.unite_reference || '')
-                }
-              }}
-              style={{ color: colors.text }}
-            >
-              <Picker.Item label="Sélectionner un produit" value="" />
-              {products.map(p => (
-                <Picker.Item key={p.id} label={p.nom} value={p.nom} />
-              ))}
-            </Picker>
-          </View>
-          
-          <View style={{ flexDirection: 'row' }}>
-            <View style={{ flex: 1, marginRight: 12 }}>
-              <Text style={[typography.caption, { marginBottom: 8, color: colors.text, fontWeight: '600' }]}>
-                Quantité *
-              </Text>
-              <TextInput
-                style={globalStyles.input}
-                placeholder="Quantité"
-                value={quantity}
-                onChangeText={setQuantity}
-                keyboardType="numeric"
-                placeholderTextColor={colors.textLight}
-              />
+        </View>
+        
+        <ScrollView 
+          ref={scrollViewRef}
+          style={{ flex: 1 }}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={{ 
+            padding: 20, 
+            paddingBottom: keyboardVisible ? 300 : 100,
+            minHeight: '100%'
+          }}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Information Card */}
+          <View style={[globalStyles.cardLuxury, { marginBottom: 20 }]}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
+              <Text style={{ fontSize: 24, marginRight: 8 }}>📋</Text>
+              <Text style={[typography.h3, { color: colors.primary }]}>Informations de Commande</Text>
             </View>
             
-            <View style={{ flex: 1 }}>
-              <Text style={[typography.caption, { marginBottom: 8, color: colors.text, fontWeight: '600' }]}>
-                Unité
-              </Text>
-              <TextInput
-                style={globalStyles.input}
-                placeholder="Unité"
-                value={unit}
-                onChangeText={setUnit}
-                placeholderTextColor={colors.textLight}
-              />
-            </View>
+            <Text style={[typography.caption, { marginBottom: 8, color: colors.text, fontWeight: '600' }]}>Fournisseur *</Text>
+            <TextInput
+              style={[globalStyles.input, { marginBottom: 16 }]}
+              placeholder="Nom du fournisseur"
+              value={fournisseur}
+              onChangeText={setFournisseur}
+              placeholderTextColor={colors.textLight}
+            />
+            
+            <Text style={[typography.caption, { marginBottom: 8, color: colors.text, fontWeight: '600' }]}>Date de Commande *</Text>
+            <TextInput
+              style={[globalStyles.input, { marginBottom: 16 }]}
+              value={dateCommande}
+              onChangeText={setDateCommande}
+              placeholder="AAAA-MM-JJ"
+              placeholderTextColor={colors.textLight}
+            />
+            
+            <Text style={[typography.caption, { marginBottom: 8, color: colors.text, fontWeight: '600' }]}>Notes (Optionnel)</Text>
+            <TextInput
+              style={[globalStyles.input, { minHeight: 100, textAlignVertical: 'top' }]}
+              placeholder="Informations supplémentaires..."
+              value={notes}
+              onChangeText={setNotes}
+              multiline
+              numberOfLines={4}
+              placeholderTextColor={colors.textLight}
+            />
           </View>
-          
-          <TouchableOpacity
-            style={[globalStyles.buttonGold, { marginTop: 16 }]}
-            onPress={addOrderItem}
-          >
-            <Text style={globalStyles.buttonText}>➕ Ajouter à la Commande</Text>
-          </TouchableOpacity>
-        </View>
 
-        {/* Order Items */}
-        {orderItems.length > 0 && (
-          <View style={[globalStyles.cardLuxury, { marginBottom: 32 }]}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-              <Text style={[typography.h2, { color: colors.primary }]}>
-                📋 Commande ({orderItems.length})
-              </Text>
-              <TouchableOpacity onPress={clearOrder}>
-                <Text style={{ color: colors.danger, fontSize: 14, fontWeight: '600' }}>Effacer tout</Text>
+          {/* Add Product Section */}
+          <View style={{ marginBottom: 20, zIndex: 1 }}>
+            <View style={[globalStyles.card]}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
+                <Text style={{ fontSize: 24, marginRight: 8 }}>📦</Text>
+                <Text style={[typography.h3, { color: colors.primary }]}>Ajouter un Produit</Text>
+              </View>
+              
+              <Text style={[typography.caption, { marginBottom: 8, color: colors.text, fontWeight: '600' }]}>Produit *</Text>
+              <View style={{ position: 'relative' }}>
+                <TextInput
+                  style={globalStyles.input}
+                  placeholder="Rechercher ou saisir..."
+                  value={selectedProduct}
+                  onChangeText={handleProductSearch}
+                  onFocus={() => selectedProduct.length > 0 && setShowSuggestions(true)}
+                  onSubmitEditing={addOrderItem}
+                />
+              </View>
+              
+              <View style={{ flexDirection: 'row', marginTop: 16 }}>
+                <View style={{ flex: 1, marginRight: 12 }}>
+                  <Text style={[typography.caption, { marginBottom: 8, color: colors.text, fontWeight: '600' }]}>Quantité *</Text>
+                  <TextInput 
+                    ref={quantityInputRef} 
+                    style={globalStyles.input} 
+                    placeholder="0.00" 
+                    value={quantity} 
+                    onChangeText={setQuantity} 
+                    keyboardType="numeric"
+                    onSubmitEditing={addOrderItem}
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[typography.caption, { marginBottom: 8, color: colors.text, fontWeight: '600' }]}>Unité</Text>
+                  <TextInput 
+                    ref={unitInputRef} 
+                    style={globalStyles.input} 
+                    placeholder="L, kg..." 
+                    value={unit} 
+                    onChangeText={setUnit}
+                    onSubmitEditing={addOrderItem}
+                  />
+                </View>
+              </View>
+              
+              <TouchableOpacity style={[globalStyles.buttonGold, { marginTop: 16 }]} onPress={addOrderItem}>
+                <Text style={globalStyles.buttonText}>➕ Ajouter à la Commande</Text>
               </TouchableOpacity>
             </View>
-            
-            {orderItems.map((item) => (
-              <View key={item.id} style={{
-                flexDirection: 'row',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                paddingVertical: 14,
-                paddingHorizontal: 16,
+
+            {/* Suggestions Dropdown - Positioned absolutely to avoid scroll issues */}
+            {showSuggestions && suggestions.length > 0 && (
+              <View style={{
+                position: 'absolute',
+                top: 130, // Adjust based on your layout
+                left: 0,
+                right: 0,
+                backgroundColor: 'white',
                 borderRadius: 12,
-                marginBottom: 10,
-                backgroundColor: colors.backgroundAlt,
                 borderWidth: 1,
                 borderColor: colors.border,
+                maxHeight: 250,
+                ...shadows.lg,
+                zIndex: 1000,
+                marginTop: 5,
               }}>
-                <View style={{ flex: 1 }}>
-                  <Text style={[typography.body, { fontWeight: '600', color: colors.text }]}>
-                    {item.nom}
-                  </Text>
-                  <Text style={[typography.small, { color: colors.textSecondary, marginTop: 2 }]}>
-                    {item.qty} {item.unit}
-                  </Text>
-                </View>
-                
-                <TouchableOpacity 
-                  onPress={() => removeOrderItem(item.id)}
-                  style={{
-                    backgroundColor: colors.danger,
-                    width: 32,
-                    height: 32,
-                    borderRadius: 16,
-                    justifyContent: 'center',
-                    alignItems: 'center',
-                  }}
+                <ScrollView 
+                  nestedScrollEnabled={true} 
+                  style={{ maxHeight: 250 }}
+                  keyboardShouldPersistTaps="always"
                 >
-                  <Text style={{ color: 'white', fontSize: 18, fontWeight: '600' }}>×</Text>
+                  {suggestions.map((item) => (
+                    <TouchableOpacity
+                      key={item.id.toString()}
+                      style={{ 
+                        padding: 15, 
+                        borderBottomWidth: 1, 
+                        borderBottomColor: colors.borderLight 
+                      }}
+                      onPress={() => selectProduct(item)}
+                    >
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                        <Text style={{ fontWeight: '600', color: colors.text }}>{item.nom}</Text>
+                        <Text style={{ color: colors.primary, fontSize: 10 }}>{item.type_produit?.toUpperCase()}</Text>
+                      </View>
+                      {item.matiere_active && (
+                        <Text style={{ color: colors.textSecondary, fontSize: 11 }}>🧪 {item.matiere_active}</Text>
+                      )}
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+            )}
+          </View>
+
+          {/* List Section */}
+          {orderItems.length > 0 && (
+            <View style={[globalStyles.cardLuxury, { marginBottom: 32 }]}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                <Text style={[typography.h2, { color: colors.primary }]}>📋 Commande ({orderItems.length})</Text>
+                <TouchableOpacity onPress={() => setOrderItems([])}>
+                  <Text style={{ color: colors.danger, fontWeight: '600' }}>Effacer tout</Text>
                 </TouchableOpacity>
               </View>
-            ))}
-            
-            <TouchableOpacity
-              style={[globalStyles.button, { 
-                marginTop: 16,
-                backgroundColor: loading ? colors.textLight : colors.success,
-                ...shadows.md,
-              }]}
-              onPress={generatePDF}
-              disabled={loading}
-            >
-              <Text style={globalStyles.buttonText}>
-                {loading ? 'Génération...' : '📄 Générer et Télécharger PDF'}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        )}
-      </ScrollView>
-    </View>
+              
+              {orderItems.map((item) => (
+                <View key={item.id} style={{
+                  flexDirection: 'row',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  padding: 14,
+                  backgroundColor: colors.backgroundAlt,
+                  borderRadius: 12,
+                  marginBottom: 10,
+                  borderWidth: 1,
+                  borderColor: colors.border,
+                }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontWeight: '600', color: colors.text }}>{item.nom}</Text>
+                    <Text style={{ color: colors.textSecondary }}>{item.qty} {item.unit}</Text>
+                  </View>
+                  <TouchableOpacity 
+                    onPress={() => removeOrderItem(item.id)}
+                    style={{ 
+                      backgroundColor: colors.danger, 
+                      width: 28, 
+                      height: 28, 
+                      borderRadius: 14, 
+                      justifyContent: 'center', 
+                      alignItems: 'center' 
+                    }}
+                  >
+                    <Text style={{ color: 'white', fontWeight: 'bold' }}>×</Text>
+                  </TouchableOpacity>
+                </View>
+              ))}
+              
+              <TouchableOpacity 
+                style={[globalStyles.button, { marginTop: 16, backgroundColor: colors.success }]} 
+                onPress={generatePDF}
+                disabled={loading}
+              >
+                <Text style={globalStyles.buttonText}>
+                  {loading ? 'Génération...' : '📄 Générer et Télécharger PDF'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </ScrollView>
+        <Sidebar isVisible={sidebarVisible} onClose={() => setSidebarVisible(false)} />
+      </View>
+    </TouchableWithoutFeedback>
   )
 }
