@@ -2,7 +2,7 @@ import React, { useEffect, useState, useMemo } from 'react'
 import { 
   View, Text, ScrollView, TextInput, TouchableOpacity, 
   ActivityIndicator, Alert, useWindowDimensions, StyleSheet,
-  KeyboardAvoidingView, Platform, Keyboard
+  KeyboardAvoidingView, Platform, Keyboard, Modal
 } from 'react-native'
 import * as FileSystem from 'expo-file-system/legacy'
 import * as Sharing from 'expo-sharing'
@@ -21,6 +21,7 @@ export default function HistoryScreen() {
   const [treatments, setTreatments] = useState<any[]>([]) 
   const [allTreatments, setAllTreatments] = useState<any[]>([]) 
   
+  // Search & Filter
   const [parcelleSearch, setParcelleSearch] = useState('')
   const [nameSearch, setNameSearch] = useState('')
   const [typeSearch, setTypeSearch] = useState('')
@@ -40,22 +41,12 @@ export default function HistoryScreen() {
   const [exporting, setExporting] = useState(false)
   const [sidebarVisible, setSidebarVisible] = useState(false)
 
-  // --- UPDATED COLUMNS CONFIGURATION (Added 'fournisseur') ---
-  const col = { 
-    date: 90, 
-    parcelle: 110, 
-    water: 80, 
-    prod: 130, 
-    supplier: 100, // <--- NEW COLUMN WIDTH
-    qtyParcelle: 90, 
-    dosageHa: 90,
-    cout: 90, 
-  }
+  // --- EDIT STATE ---
+  const [editModalVisible, setEditModalVisible] = useState(false)
+  const [editingItem, setEditingItem] = useState<any>(null)
+  const [editDose, setEditDose] = useState('')
 
-  const normalize = (str: string) => {
-    if (!str) return ''
-    return str.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9\s]/g, '').trim()
-  }
+  const col = { date: 90, parcelle: 110, water: 80, prod: 130, supplier: 100, qtyParcelle: 120, dosageHa: 90, cout: 90 }
 
   useEffect(() => {
     if (user) loadInitialMeta()
@@ -68,6 +59,11 @@ export default function HistoryScreen() {
   useEffect(() => {
     applyLocalFilters()
   }, [parcelleSearch, nameSearch, typeSearch, maSearch, allTreatments])
+
+  const normalize = (str: string) => {
+    if (!str) return ''
+    return str.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9\s]/g, '').trim()
+  }
 
   const loadInitialMeta = async () => {
     if (!user) return
@@ -87,7 +83,6 @@ export default function HistoryScreen() {
     if (!user) return
     setLoading(true)
     try {
-      // This now fetches 'fournisseur' thanks to the database.ts update
       const data = await Database.getTraitementsWithFilters(
         user.id, filters.startDate, filters.endDate,
         undefined, undefined, undefined, undefined
@@ -108,35 +103,6 @@ export default function HistoryScreen() {
     if (maSearch) filtered = filtered.filter(t => normalize(t.produits?.matiere_active || '').includes(normalize(maSearch)))
     setTreatments(filtered)
   }
-
-  // --- GROUPING LOGIC ---
-  const groupedTreatments = useMemo(() => {
-    const groups: any = {};
-    
-    treatments.forEach(item => {
-      const key = item.groupe_id || `${item.date_traitement}_${item.parcelle}`;
-      if (!groups[key]) {
-        groups[key] = {
-          id: key,
-          date: item.date_traitement,
-          parcelle: item.parcelle,
-          water: item.quantite_eau || 0,
-          totalCost: 0,
-          items: []
-        };
-      }
-      groups[key].items.push(item);
-      groups[key].totalCost += (item.cout_estime || 0);
-    });
-
-    return Object.values(groups).sort((a: any, b: any) => 
-      new Date(b.date).getTime() - new Date(a.date).getTime()
-    );
-  }, [treatments]);
-
-  const totalFilteredCost = useMemo(() => {
-    return treatments.reduce((sum, t) => sum + (t.cout_estime || 0), 0)
-  }, [treatments])
 
   const handleFuzzySearch = (text: string, field: 'parcelle' | 'nom' | 'type' | 'ma') => {
     const query = normalize(text)
@@ -176,11 +142,71 @@ export default function HistoryScreen() {
     Keyboard.dismiss()
   }
 
+  // --- DELETE FUNCTION ---
+  const handleDelete = (item: any) => {
+    Alert.alert(
+      "Supprimer le traitement ?",
+      `Cela rajoutera ${item.quantite_utilisee} ${item.produits?.unite_reference} au stock de "${item.produits?.nom || item.name}".`,
+      [
+        { text: "Annuler", style: "cancel" },
+        { 
+          text: "Supprimer", 
+          style: "destructive", 
+          onPress: async () => {
+            if (!user) return
+            setLoading(true)
+            // @ts-ignore
+            const res = await Database.deleteTraitementSmart(user.id, item.id)
+            setLoading(false)
+            if (res.success) {
+              Alert.alert("Succès", "Traitement supprimé et stock restauré.")
+              loadTreatments()
+            } else {
+              Alert.alert("Erreur", res.error)
+            }
+          }
+        }
+      ]
+    )
+  }
+
+  // --- EDIT FUNCTIONS ---
+  const handleEditPress = (item: any) => {
+    setEditingItem(item)
+    setEditDose(item.quantite_utilisee?.toString())
+    setEditModalVisible(true)
+  }
+
+  const saveEdit = async () => {
+    if (!user || !editingItem) return
+    if (isNaN(parseFloat(editDose)) || parseFloat(editDose) < 0) {
+      Alert.alert("Erreur", "Dose invalide")
+      return
+    }
+
+    try {
+      // @ts-ignore
+      const result = await Database.updateTraitementSmart(user.id, editingItem.id, {
+        quantite: editDose,
+        date: editingItem.date_traitement
+      })
+
+      if (result.success) {
+        Alert.alert("Succès", "Dose corrigée et stock réajusté.")
+        setEditModalVisible(false)
+        loadTreatments()
+      } else {
+        Alert.alert("Erreur", result.error || "Échec de la mise à jour")
+      }
+    } catch (e) {
+      console.error(e)
+    }
+  }
+
   const exportToCSV = async () => {
     if (treatments.length === 0) return
     setExporting(true)
     try {
-      // Added Fournisseur to CSV export
       const headers = ['Date', 'Parcelle', 'Produit', 'Fournisseur', 'Quantité/Parcelle', 'Dosage/Ha', 'Eau (L)', 'Coût']
       const rows = treatments.map(t => {
         const pInfo = allParcelles.find(p => p.nom === t.parcelle)
@@ -190,7 +216,7 @@ export default function HistoryScreen() {
           formatDate(t.date_traitement),
           t.parcelle,
           t.produits?.nom || t.name,
-          t.produits?.fournisseur || 'Inconnu', // Export Supplier
+          t.produits?.fournisseur || 'Inconnu',
           `${t.quantite_utilisee} ${t.produits?.unite_reference || ''}`,
           `${doseHa} ${t.produits?.unite_reference || ''}/ha`,
           t.quantite_eau || 0,
@@ -203,6 +229,31 @@ export default function HistoryScreen() {
       await Sharing.shareAsync(fileUri)
     } catch (e) { Alert.alert('Erreur', 'Export échoué') } finally { setExporting(false) }
   }
+
+  // Grouping logic for display
+  const groupedTreatments = useMemo(() => {
+    const groups: any = {};
+    treatments.forEach(item => {
+      const key = item.groupe_id || `${item.date_traitement}_${item.parcelle}`;
+      if (!groups[key]) {
+        groups[key] = {
+          id: key,
+          date: item.date_traitement,
+          parcelle: item.parcelle,
+          water: item.quantite_eau || 0,
+          totalCost: 0,
+          items: []
+        };
+      }
+      groups[key].items.push(item);
+      groups[key].totalCost += (item.cout_estime || 0);
+    });
+    return Object.values(groups).sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }, [treatments]);
+
+  const totalFilteredCost = useMemo(() => {
+    return treatments.reduce((sum, t) => sum + (t.cout_estime || 0), 0)
+  }, [treatments])
 
   const TotalBar = () => (
     <View style={styles.totalBar}>
@@ -223,12 +274,13 @@ export default function HistoryScreen() {
       </View>
 
       <ScrollView style={{ flex: 1, padding: 15 }} keyboardShouldPersistTaps="handled">
-        
         {/* Filters */}
         <View style={[globalStyles.card, { marginBottom: 15, zIndex: 100 }]}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
             <Text style={typography.h3}>🔍 Filtres</Text>
-            <TouchableOpacity onPress={() => { setParcelleSearch(''); setNameSearch(''); setTypeSearch(''); setMaSearch(''); }}><Text style={{ color: colors.danger }}>Effacer</Text></TouchableOpacity>
+            <TouchableOpacity onPress={() => { setParcelleSearch(''); setNameSearch(''); setTypeSearch(''); setMaSearch(''); }}>
+              <Text style={{ color: colors.danger }}>Effacer</Text>
+            </TouchableOpacity>
           </View>
           
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 }}>
@@ -272,14 +324,12 @@ export default function HistoryScreen() {
           </View>
         </View>
 
-        <TouchableOpacity style={[globalStyles.button, { backgroundColor: colors.success, marginBottom: 15 }]} onPress={exportToCSV}>
-          <Text style={globalStyles.buttonText}>📥 Exporter</Text>
+        <TouchableOpacity style={[globalStyles.button, { backgroundColor: colors.success, marginBottom: 15 }]} onPress={exportToCSV} disabled={exporting}>
+          {exporting ? <ActivityIndicator color="white" /> : <Text style={globalStyles.buttonText}>📥 Exporter</Text>}
         </TouchableOpacity>
 
-        {/* --- TOP TOTAL --- */}
         <TotalBar />
 
-        {/* --- TABLE WITH HORIZONTAL SCROLL --- */}
         <ScrollView horizontal showsHorizontalScrollIndicator={true} style={styles.tableCard}>
           <View>
             <View style={styles.tableHeader}>
@@ -287,100 +337,117 @@ export default function HistoryScreen() {
               <Text style={[styles.hCell, { width: col.parcelle }]}>Parcelle</Text>
               <Text style={[styles.hCell, { width: col.water }]}>Eau</Text>
               <Text style={[styles.hCell, { width: col.prod }]}>Produit</Text>
-              {/* NEW COLUMN HEADER */}
               <Text style={[styles.hCell, { width: col.supplier }]}>Fourn.</Text>
-              <Text style={[styles.hCell, { width: col.qtyParcelle }]}>Qté/Parc.</Text>
+              <Text style={[styles.hCell, { width: col.qtyParcelle }]}>Qté (Edit)</Text>
               <Text style={[styles.hCell, { width: col.dosageHa }]}>Dose/Ha</Text>
               <Text style={[styles.hCell, { width: col.cout }]}>Coût</Text>
             </View>
 
             {loading ? <ActivityIndicator style={{ margin: 30 }} color={colors.gold} /> : (
-              <View>
-                {(groupedTreatments as any[]).map((group, gIndex) => {
-                  const pInfo = allParcelles.find(p => p.nom === group.parcelle)
-                  const surface = pInfo?.surface_ha || 0
+              (groupedTreatments as any[]).map((group, gIndex) => {
+                const pInfo = allParcelles.find(p => p.nom === group.parcelle)
+                const surface = pInfo?.surface_ha || 0
 
-                  return (
-                    <View key={group.id}>
-                      {group.items.map((item: any, i: number) => {
-                        const doseHa = surface > 0 ? (item.quantite_utilisee / surface).toFixed(2) : '0.00'
-                        const isFirst = i === 0
+                return (
+                  <View key={group.id}>
+                    {group.items.map((item: any, i: number) => {
+                      const doseHa = surface > 0 ? (item.quantite_utilisee / surface).toFixed(2) : '0.00'
+                      const isFirst = i === 0
 
-                        return (
-                          <View key={i} style={[
-                            styles.tableRow, 
-                            { 
-                              backgroundColor: gIndex % 2 === 0 ? '#fff' : '#f8f9fa',
-                              borderBottomWidth: i === group.items.length - 1 ? 1 : 0,
-                              borderBottomColor: '#cbd5e1'
-                            }
-                          ]}>
-                            {/* MERGED CELLS */}
-                            <Text style={[styles.cell, { width: col.date, color: isFirst ? colors.text : 'transparent', fontWeight: '600' }]}>
-                              {isFirst ? formatDate(group.date) : ''}
-                            </Text>
-                            
-                            <Text style={[styles.cell, { width: col.parcelle, color: isFirst ? colors.text : 'transparent', fontWeight: '600' }]}>
-                              {isFirst ? group.parcelle : ''}
-                            </Text>
-
-                            <View style={{ width: col.water, justifyContent: 'center', alignItems: 'center' }}>
-                              {isFirst && group.water > 0 ? (
-                                <View>
-                                  <Text style={[styles.cell, { width: col.water, color: colors.primary, fontWeight: 'bold' }]}>
-                                    {group.water} L
-                                  </Text>
-                                  {surface > 0 && (
-                                     <Text style={{ fontSize: 9, color: colors.textSecondary, textAlign: 'center' }}>
-                                       {(group.water / surface).toFixed(0)} L/Ha
-                                     </Text>
-                                  )}
-                                </View>
-                              ) : null}
-                            </View>
-
-                            {/* PRODUCT DETAILS */}
-                            <View style={{ width: col.prod, paddingHorizontal: 10 }}>
-                              <Text style={{ fontSize: 12, fontWeight: '600', color: colors.text }}>
-                                {item.produits?.nom || item.name}
-                              </Text>
-                            </View>
-
-                            {/* NEW SUPPLIER COLUMN */}
-                            <View style={{ width: col.supplier, paddingHorizontal: 5 }}>
-                               <Text style={{ fontSize: 11, color: colors.textSecondary, textAlign: 'center' }} numberOfLines={1}>
-                                 {item.produits?.fournisseur || '-'}
-                               </Text>
-                            </View>
-
-                            <Text style={[styles.cell, { width: col.qtyParcelle }]}>
-                              {item.quantite_utilisee} {item.produits?.unite_reference || ''}
-                            </Text>
-
-                            <Text style={[styles.cell, { width: col.dosageHa, color: colors.success }]}>
-                              {doseHa}/ha
-                            </Text>
-
-                            <Text style={[styles.cell, { width: col.cout, fontWeight: 'bold', color: colors.gold }]}>
-                              {formatCurrency(item.cout_estime)}
-                            </Text>
+                      return (
+                        <View key={i} style={[styles.tableRow, { backgroundColor: gIndex % 2 === 0 ? '#fff' : '#f8f9fa', borderBottomWidth: i === group.items.length - 1 ? 1 : 0, borderBottomColor: '#cbd5e1' }]}>
+                          <Text style={[styles.cell, { width: col.date, color: isFirst ? colors.text : 'transparent', fontWeight: '600' }]}>
+                            {isFirst ? formatDate(group.date) : ''}
+                          </Text>
+                          <Text style={[styles.cell, { width: col.parcelle, color: isFirst ? colors.text : 'transparent', fontWeight: '600' }]}>
+                            {isFirst ? group.parcelle : ''}
+                          </Text>
+                          
+                          <View style={{ width: col.water, justifyContent: 'center', alignItems: 'center' }}>
+                            {isFirst && group.water > 0 ? (
+                              <View>
+                                <Text style={[styles.cell, { width: col.water, color: colors.primary, fontWeight: 'bold' }]}>{group.water} L</Text>
+                                {surface > 0 && <Text style={{ fontSize: 9, color: colors.textSecondary, textAlign: 'center' }}>{(group.water / surface).toFixed(0)} L/Ha</Text>}
+                              </View>
+                            ) : null}
                           </View>
-                        )
-                      })}
-                    </View>
-                  )
-                })}
-              </View>
+
+                          <View style={{ width: col.prod, paddingHorizontal: 10 }}>
+                            <Text style={{ fontSize: 12, fontWeight: '600', color: colors.text }}>{item.produits?.nom || item.name}</Text>
+                          </View>
+                          
+                          <View style={{ width: col.supplier, paddingHorizontal: 5 }}>
+                             <Text style={{ fontSize: 11, color: colors.textSecondary, textAlign: 'center' }} numberOfLines={1}>{item.produits?.fournisseur || '-'}</Text>
+                          </View>
+
+                          {/* EDITABLE QUANTITY & DELETE */}
+                          <View style={{ width: col.qtyParcelle, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
+                            <TouchableOpacity 
+                              style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#eef2ff', borderRadius: 4, paddingHorizontal: 6, paddingVertical: 4, marginRight: 8 }}
+                              onPress={() => handleEditPress(item)}
+                            >
+                              <Text style={{ fontSize: 12, fontWeight: 'bold', color: colors.primary }}>
+                                {item.quantite_utilisee} {item.produits?.unite_reference}
+                              </Text>
+                              <Feather name="edit-2" size={10} color={colors.primary} style={{ marginLeft: 4 }} />
+                            </TouchableOpacity>
+                            
+                            <TouchableOpacity onPress={() => handleDelete(item)} style={{ padding: 4 }}>
+                              <Feather name="trash-2" size={14} color={colors.danger} />
+                            </TouchableOpacity>
+                          </View>
+
+                          <Text style={[styles.cell, { width: col.dosageHa, color: colors.success }]}>
+                            {doseHa}/ha
+                          </Text>
+
+                          <Text style={[styles.cell, { width: col.cout, fontWeight: 'bold', color: colors.gold }]}>
+                            {formatCurrency(item.cout_estime)}
+                          </Text>
+                        </View>
+                      )
+                    })}
+                  </View>
+                )
+              })
             )}
           </View>
         </ScrollView>
-        
-        {/* --- BOTTOM TOTAL --- */}
         <View style={{ marginBottom: 50 }}>
           <TotalBar />
         </View>
-
       </ScrollView>
+
+      {/* --- EDIT DOSE MODAL --- */}
+      <Modal visible={editModalVisible} transparent animationType="fade" onRequestClose={() => setEditModalVisible(false)}>
+         <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 30 }}>
+            <View style={{ backgroundColor: 'white', borderRadius: 12, padding: 20, ...shadows.lg }}>
+               <Text style={typography.h3}>Corriger la Dose</Text>
+               <Text style={{ color: colors.textSecondary, marginBottom: 15, fontSize: 12, marginTop: 5 }}>
+                 Le stock sera automatiquement mis à jour. (Ex: Si vous réduisez la dose, le stock augmentera).
+               </Text>
+               
+               <Text style={typography.caption}>Nouvelle Quantité Utilitaire</Text>
+               <TextInput 
+                 style={[globalStyles.input, { fontSize: 18, textAlign: 'center', fontWeight: 'bold' }]} 
+                 value={editDose} 
+                 onChangeText={setEditDose} 
+                 keyboardType="numeric" 
+                 autoFocus
+               />
+
+               <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
+                  <TouchableOpacity onPress={() => setEditModalVisible(false)} style={[globalStyles.button, { flex: 1, backgroundColor: '#eee' }]}>
+                     <Text style={{ color: '#333' }}>Annuler</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={saveEdit} style={[globalStyles.button, { flex: 1 }]}>
+                     <Text style={globalStyles.buttonText}>Valider</Text>
+                  </TouchableOpacity>
+               </View>
+            </View>
+         </KeyboardAvoidingView>
+      </Modal>
+
       <Sidebar isVisible={sidebarVisible} onClose={() => setSidebarVisible(false)} />
     </KeyboardAvoidingView>
   )

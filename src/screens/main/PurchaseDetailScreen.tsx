@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from 'react'
-import { View, Text, ScrollView, TextInput, TouchableOpacity, Alert, ActivityIndicator, useWindowDimensions, StyleSheet, KeyboardAvoidingView, Platform, Keyboard } from 'react-native'
-// Legacy import for SDK 54 compatibility
+import { 
+  View, Text, ScrollView, TextInput, TouchableOpacity, Alert, 
+  ActivityIndicator, useWindowDimensions, StyleSheet, KeyboardAvoidingView, 
+  Platform, Keyboard, Modal 
+} from 'react-native'
 import * as FileSystem from 'expo-file-system/legacy'
 import * as Sharing from 'expo-sharing'
 import { useAuth } from '../../hooks/useAuth'
@@ -18,18 +21,17 @@ export default function PurchaseDetailScreen() {
   const { width } = useWindowDimensions()
   const [loading, setLoading] = useState(true)
   const [achats, setAchats] = useState<any[]>([])
-  
-  // --- Individual Search States ---
+  const [allAchats, setAllAchats] = useState<any[]>([]) 
+
+  // --- Search & Filter States ---
   const [supplierSearch, setSupplierSearch] = useState('')
   const [nameSearch, setNameSearch] = useState('')
   const [typeSearch, setTypeSearch] = useState('')
   const [maSearch, setMaSearch] = useState('')
-
-  // --- Suggestion States ---
+  
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [activeSearchField, setActiveSearchField] = useState<'supplier' | 'name' | 'type' | 'ma' | null>(null)
 
-  // --- Filter State ---
   const currentYear = new Date().getFullYear()
   const [filters, setFilters] = useState({
     startDate: `${currentYear}-01-01`,
@@ -42,9 +44,19 @@ export default function PurchaseDetailScreen() {
   
   const [exporting, setExporting] = useState(false)
   const [sidebarVisible, setSidebarVisible] = useState(false)
-  const [allAchats, setAllAchats] = useState<any[]>([]) // Store unfiltered data for suggestions
 
-  const col = { date: 90, prod: 150, type: 100, ma: 120, fourn: 130, qte: 80, puht: 90, tva: 60, puttc: 90, total: 110 }
+  // --- EDIT MODAL STATE ---
+  const [editModalVisible, setEditModalVisible] = useState(false)
+  const [editingItem, setEditingItem] = useState<any>(null)
+  const [editForm, setEditForm] = useState({
+    nom: '',
+    fournisseur: '',
+    quantite: '',
+    prix: '',
+    date: ''
+  })
+
+  const col = { date: 90, prod: 160, type: 100, ma: 120, fourn: 130, qte: 80, puht: 90, tva: 60, puttc: 90, total: 110 }
 
   useEffect(() => {
     if (route.params?.prefilledSupplier) {
@@ -53,83 +65,44 @@ export default function PurchaseDetailScreen() {
     }
   }, [route.params])
 
-  // Load all data once for suggestions
   useEffect(() => {
-    if (user) loadAllData()
+    if (user) {
+      loadAllData()
+    }
   }, [user])
 
   useEffect(() => {
-    if (user) loadAchats()
+    if (user) {
+      loadAchats()
+    }
   }, [filters, user])
 
-  // Improved normalize function for better fuzzy matching
   const normalize = (str: string) => {
     if (!str) return ''
-    return str
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '') // Remove diacritics
-      .replace(/[^a-z0-9\s]/g, '')
-      .trim()
+    return str.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9\s]/g, '').trim()
   }
 
   const loadAllData = async () => {
     if (!user) return
     try {
-      // Load all achats for the current year for suggestions
-      const data = await Database.getAchatsWithFilters(
-        user.id, filters.startDate, filters.endDate, 
-        undefined, undefined, undefined, undefined
-      )
+      const data = await Database.getAchatsWithFilters(user.id, filters.startDate, filters.endDate, undefined, undefined, undefined, undefined)
       setAllAchats(data)
-    } catch (error) {
-      console.error('Error loading all data:', error)
-    }
+    } catch (error) { console.error(error) }
   }
 
   const loadAchats = async () => {
     if (!user) return
     setLoading(true)
     try {
-      // Load all achats within date range without text filters
-      const data = await Database.getAchatsWithFilters(
-        user.id, filters.startDate, filters.endDate, 
-        undefined, undefined, undefined, undefined
-      )
+      const data = await Database.getAchatsWithFilters(user.id, filters.startDate, filters.endDate, undefined, undefined, undefined, undefined)
       
-      // Apply case-insensitive text filters locally
       let filtered = data
-      
-      if (filters.supplier) {
-        const normalizedSupplier = normalize(filters.supplier)
-        filtered = filtered.filter(a => 
-          normalize(a.fournisseur).includes(normalizedSupplier)
-        )
-      }
-      
-      if (filters.name) {
-        const normalizedName = normalize(filters.name)
-        filtered = filtered.filter(a => 
-          normalize(a.produits?.nom || a.nom).includes(normalizedName)
-        )
-      }
-      
-      if (filters.type) {
-        const normalizedType = normalize(filters.type)
-        filtered = filtered.filter(a => 
-          normalize(a.produits?.type_produit || '').includes(normalizedType)
-        )
-      }
-      
-      if (filters.ma) {
-        const normalizedMa = normalize(filters.ma)
-        filtered = filtered.filter(a => 
-          normalize(a.produits?.matiere_active || '').includes(normalizedMa)
-        )
-      }
+      if (filters.supplier) filtered = filtered.filter(a => normalize(a.fournisseur).includes(normalize(filters.supplier!)))
+      if (filters.name) filtered = filtered.filter(a => normalize(a.produits?.nom || a.nom).includes(normalize(filters.name!)))
+      if (filters.type) filtered = filtered.filter(a => normalize(a.produits?.type_produit || '').includes(normalize(filters.type!)))
+      if (filters.ma) filtered = filtered.filter(a => normalize(a.produits?.matiere_active || '').includes(normalize(filters.ma!)))
       
       setAchats(filtered)
-      // Update allAchats as well
       setAllAchats(data)
     } catch (error) {
       Alert.alert('Erreur', 'Impossible de charger les achats')
@@ -138,48 +111,97 @@ export default function PurchaseDetailScreen() {
     }
   }
 
+  // --- DELETE FUNCTION ---
+  const handleDelete = (item: any) => {
+    Alert.alert(
+      "Supprimer l'achat ?",
+      `Cela retirera ${item.quantite_recue} ${item.unite_achat} du stock actuel.`,
+      [
+        { text: "Annuler", style: "cancel" },
+        { 
+          text: "Supprimer", 
+          style: "destructive", 
+          onPress: async () => {
+            if (!user) return
+            setLoading(true)
+            // @ts-ignore
+            const res = await Database.deleteAchatSmart(user.id, item.id)
+            setLoading(false)
+            if (res.success) {
+              Alert.alert("Succès", "Achat supprimé et stock mis à jour.")
+              loadAchats()
+            } else {
+              Alert.alert("Erreur", res.error)
+            }
+          }
+        }
+      ]
+    )
+  }
+
+  // --- EDIT FUNCTIONS ---
+  const handleEditPress = (item: any) => {
+    setEditingItem(item)
+    setEditForm({
+      nom: item.produits?.nom || item.nom,
+      fournisseur: item.fournisseur || '',
+      quantite: item.quantite_recue?.toString() || '0',
+      prix: item.prix_unitaire_ht?.toString() || '0',
+      date: item.date_commande
+    })
+    setEditModalVisible(true)
+  }
+
+  const saveEdit = async () => {
+    if (!user || !editingItem) return
+
+    if (!editForm.nom.trim()) { Alert.alert("Erreur", "Le nom est obligatoire"); return; }
+    if (isNaN(parseFloat(editForm.quantite)) || parseFloat(editForm.quantite) <= 0) { Alert.alert("Erreur", "Quantité invalide"); return; }
+
+    setLoading(true)
+    try {
+      // @ts-ignore 
+      const result = await Database.updateAchatSmart(user.id, editingItem.id, {
+        nom: editForm.nom.trim(),
+        fournisseur: editForm.fournisseur.trim(),
+        quantite: editForm.quantite,
+        prix_u_ht: editForm.prix,
+        taux_tva: editingItem.taux_tva, 
+        date: editForm.date,
+        type_produit: editingItem.produits?.type_produit 
+      })
+
+      if (result.success) {
+        Alert.alert("Succès", "Achat corrigé et stock mis à jour.")
+        setEditModalVisible(false)
+        loadAchats() 
+      } else {
+        Alert.alert("Erreur", result.error || "Impossible de modifier")
+      }
+    } catch (e) {
+      Alert.alert("Erreur", "Une erreur est survenue")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // --- SEARCH FUNCTIONS ---
   const handleFuzzySearch = (text: string, field: 'supplier' | 'name' | 'type' | 'ma') => {
     const query = normalize(text)
-    
-    // Update local search state
     if (field === 'supplier') setSupplierSearch(text)
     if (field === 'name') setNameSearch(text)
     if (field === 'type') setTypeSearch(text)
     if (field === 'ma') setMaSearch(text)
-
-    // Update filters with original text
     setFilters(prev => ({ ...prev, [field]: text || undefined }))
 
-    // Generate suggestions from all loaded data (use allAchats for better suggestions)
     if (query.length > 0) {
       let sourceData = allAchats.length > 0 ? allAchats : achats
       let filtered: string[] = []
       
-      if (field === 'supplier') {
-        filtered = Array.from(new Set(
-          sourceData
-            .filter(a => normalize(a.fournisseur).includes(query))
-            .map(a => a.fournisseur)
-        ))
-      } else if (field === 'name') {
-        filtered = Array.from(new Set(
-          sourceData
-            .filter(a => normalize(a.produits?.nom || a.nom).includes(query))
-            .map(a => a.produits?.nom || a.nom)
-        ))
-      } else if (field === 'type') {
-        filtered = Array.from(new Set(
-          sourceData
-            .filter(a => a.produits?.type_produit && normalize(a.produits.type_produit).includes(query))
-            .map(a => a.produits?.type_produit)
-        ))
-      } else if (field === 'ma') {
-        filtered = Array.from(new Set(
-          sourceData
-            .filter(a => a.produits?.matiere_active && normalize(a.produits.matiere_active).includes(query))
-            .map(a => a.produits?.matiere_active)
-        ))
-      }
+      if (field === 'supplier') filtered = Array.from(new Set(sourceData.filter(a => normalize(a.fournisseur).includes(query)).map(a => a.fournisseur)))
+      else if (field === 'name') filtered = Array.from(new Set(sourceData.filter(a => normalize(a.produits?.nom || a.nom).includes(query)).map(a => a.produits?.nom || a.nom)))
+      else if (field === 'type') filtered = Array.from(new Set(sourceData.filter(a => a.produits?.type_produit && normalize(a.produits.type_produit).includes(query)).map(a => a.produits?.type_produit)))
+      else if (field === 'ma') filtered = Array.from(new Set(sourceData.filter(a => a.produits?.matiere_active && normalize(a.produits.matiere_active).includes(query)).map(a => a.produits?.matiere_active)))
       
       setSuggestions(filtered.filter(Boolean).slice(0, 5))
       setActiveSearchField(field)
@@ -222,23 +244,14 @@ export default function PurchaseDetailScreen() {
           (a.montant_ttc || 0).toFixed(2)
         ].map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')
       })
-
       const csvString = `\uFEFF${[headers.join(','), ...rows].join('\n')}`
       const fileUri = `${FileSystem.cacheDirectory}Rapport_Achats_${new Date().getTime()}.csv`
-
       await FileSystem.writeAsStringAsync(fileUri, csvString, { encoding: 'utf8' })
-      
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(fileUri, { mimeType: 'text/csv', UTI: 'public.comma-separated-values-text' })
-      }
-    } catch (e) {
-      Alert.alert('Erreur', 'Échec de l\'export')
-    } finally {
-      setExporting(false)
-    }
+      if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(fileUri, { mimeType: 'text/csv', UTI: 'public.comma-separated-values-text' })
+    } catch (e) { Alert.alert('Erreur', 'Échec de l\'export') } 
+    finally { setExporting(false) }
   }
 
-  // Calculate Total of Filtered Results
   const totalFilteredAmount = achats.reduce((sum, item) => sum + (item.montant_ttc || 0), 0)
 
   return (
@@ -281,11 +294,7 @@ export default function PurchaseDetailScreen() {
             {activeSearchField === 'supplier' && suggestions.length > 0 && (
               <View style={styles.suggestionBox}>
                 {suggestions.map((s, idx) => (
-                  <TouchableOpacity 
-                    key={idx} 
-                    style={styles.suggestionItem} 
-                    onPress={() => selectSuggestion(s, 'supplier')}
-                  >
+                  <TouchableOpacity key={idx} style={styles.suggestionItem} onPress={() => selectSuggestion(s, 'supplier')}>
                     <Text>{s}</Text>
                   </TouchableOpacity>
                 ))}
@@ -307,11 +316,7 @@ export default function PurchaseDetailScreen() {
             {activeSearchField === 'name' && suggestions.length > 0 && (
               <View style={styles.suggestionBox}>
                 {suggestions.map((s, idx) => (
-                  <TouchableOpacity 
-                    key={idx} 
-                    style={styles.suggestionItem} 
-                    onPress={() => selectSuggestion(s, 'name')}
-                  >
+                  <TouchableOpacity key={idx} style={styles.suggestionItem} onPress={() => selectSuggestion(s, 'name')}>
                     <Text>{s}</Text>
                   </TouchableOpacity>
                 ))}
@@ -319,6 +324,7 @@ export default function PurchaseDetailScreen() {
             )}
           </View>
 
+          {/* Type and MA Search with Suggestions */}
           <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
             <View style={{ width: '48%', zIndex: 500 }}>
               <Text style={typography.caption}>Type</Text>
@@ -333,11 +339,7 @@ export default function PurchaseDetailScreen() {
               {activeSearchField === 'type' && suggestions.length > 0 && (
                 <View style={styles.suggestionBox}>
                   {suggestions.map((s, idx) => (
-                    <TouchableOpacity 
-                      key={idx} 
-                      style={styles.suggestionItem} 
-                      onPress={() => selectSuggestion(s, 'type')}
-                    >
+                    <TouchableOpacity key={idx} style={styles.suggestionItem} onPress={() => selectSuggestion(s, 'type')}>
                       <Text>{s}</Text>
                     </TouchableOpacity>
                   ))}
@@ -357,11 +359,7 @@ export default function PurchaseDetailScreen() {
               {activeSearchField === 'ma' && suggestions.length > 0 && (
                 <View style={styles.suggestionBox}>
                   {suggestions.map((s, idx) => (
-                    <TouchableOpacity 
-                      key={idx} 
-                      style={styles.suggestionItem} 
-                      onPress={() => selectSuggestion(s, 'ma')}
-                    >
+                    <TouchableOpacity key={idx} style={styles.suggestionItem} onPress={() => selectSuggestion(s, 'ma')}>
                       <Text>{s}</Text>
                     </TouchableOpacity>
                   ))}
@@ -371,24 +369,17 @@ export default function PurchaseDetailScreen() {
           </View>
         </View>
 
-        <TouchableOpacity 
-          style={[globalStyles.button, { backgroundColor: colors.success, marginBottom: 15 }]} 
-          onPress={exportToCSV} 
-          disabled={exporting}
-        >
+        <TouchableOpacity style={[globalStyles.button, { backgroundColor: colors.success, marginBottom: 15 }]} onPress={exportToCSV} disabled={exporting}>
           {exporting ? <ActivityIndicator color="white" /> : <Text style={globalStyles.buttonText}>📥 Exporter Excel (CSV)</Text>}
         </TouchableOpacity>
 
-        {/* --- TOTAL BAR ON TOP --- */}
+        {/* Summary Bar */}
         <View style={styles.summaryBar}>
-          <Text style={{ color: 'white', fontWeight: 'bold' }}>
-            {achats.length} Résultat(s)
-          </Text>
-          <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 16 }}>
-            Total: {formatCurrency(totalFilteredAmount)}
-          </Text>
+          <Text style={{ color: 'white', fontWeight: 'bold' }}>{achats.length} Résultat(s)</Text>
+          <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 16 }}>Total: {formatCurrency(totalFilteredAmount)}</Text>
         </View>
 
+        {/* DATA TABLE */}
         <ScrollView horizontal showsHorizontalScrollIndicator={true} style={styles.tableCard}>
           <View>
             <View style={styles.tableHeader}>
@@ -411,7 +402,20 @@ export default function PurchaseDetailScreen() {
                   return (
                     <View key={i} style={[styles.tableRow, { backgroundColor: i % 2 === 0 ? '#fff' : '#f8f9fa' }]}>
                       <Text style={[styles.cell, { width: col.date }]}>{formatDate(a.date_commande)}</Text>
-                      <Text style={[styles.cell, { width: col.prod, fontWeight: 'bold' }]}>{a.produits?.nom || a.nom}</Text>
+                      
+                      {/* EDIT & DELETE BUTTONS */}
+                      <View style={{ width: col.prod, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10 }}>
+                        <TouchableOpacity onPress={() => handleEditPress(a)} style={{marginRight: 8}}>
+                          <Feather name="edit-2" size={16} color={colors.primary} />
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={() => handleDelete(a)} style={{marginRight: 8}}>
+                          <Feather name="trash-2" size={16} color={colors.danger} />
+                        </TouchableOpacity>
+                        <Text style={[styles.cell, { paddingHorizontal: 0, fontWeight: 'bold', color: colors.text, flex: 1 }]} numberOfLines={1}>
+                          {a.produits?.nom || a.nom}
+                        </Text>
+                      </View>
+
                       <Text style={[styles.cell, { width: col.type }]}>{a.produits?.type_produit || '-'}</Text>
                       <Text style={[styles.cell, { width: col.ma, fontStyle: 'italic' }]}>{a.produits?.matiere_active || '-'}</Text>
                       <Text style={[styles.cell, { width: col.fourn }]}>{a.fournisseur}</Text>
@@ -423,7 +427,7 @@ export default function PurchaseDetailScreen() {
                     </View>
                   )
                 })}
-                
+
                 {/* --- TOTAL ROW AT BOTTOM --- */}
                 {achats.length > 0 && (
                   <View style={[styles.tableRow, { backgroundColor: colors.primary + '10', borderTopWidth: 2, borderTopColor: colors.primary }]}>
@@ -439,7 +443,55 @@ export default function PurchaseDetailScreen() {
             )}
           </View>
         </ScrollView>
+        <View style={{height: 50}} />
       </ScrollView>
+
+      {/* --- EDIT MODAL --- */}
+      <Modal visible={editModalVisible} transparent animationType="slide" onRequestClose={() => setEditModalVisible(false)}>
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 20 }}>
+          <View style={{ backgroundColor: 'white', borderRadius: 12, padding: 20, ...shadows.xl }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 }}>
+               <Text style={typography.h2}>Corriger l'achat</Text>
+               <TouchableOpacity onPress={() => setEditModalVisible(false)}><Feather name="x" size={24} color="#999"/></TouchableOpacity>
+            </View>
+            <Text style={{ fontSize: 12, color: colors.info, marginBottom: 15, fontStyle: 'italic' }}>
+              ⚠️ Modifier le nom déplacera le stock vers le bon produit. Modifier la quantité recalculera le stock actuel.
+            </Text>
+
+            <ScrollView>
+              <Text style={typography.caption}>Date</Text>
+              <DateInput value={editForm.date} onChange={d => setEditForm({...editForm, date: d})} />
+
+              <Text style={typography.caption}>Nom Produit (Correction orthographe)</Text>
+              <TextInput style={globalStyles.input} value={editForm.nom} onChangeText={t => setEditForm({...editForm, nom: t})} />
+
+              <Text style={typography.caption}>Fournisseur</Text>
+              <TextInput style={globalStyles.input} value={editForm.fournisseur} onChangeText={t => setEditForm({...editForm, fournisseur: t})} />
+
+              <View style={{ flexDirection: 'row', gap: 10 }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={typography.caption}>Quantité</Text>
+                  <TextInput style={globalStyles.input} value={editForm.quantite} onChangeText={t => setEditForm({...editForm, quantite: t})} keyboardType="numeric" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={typography.caption}>Prix Unitaire HT</Text>
+                  <TextInput style={globalStyles.input} value={editForm.prix} onChangeText={t => setEditForm({...editForm, prix: t})} keyboardType="numeric" />
+                </View>
+              </View>
+            </ScrollView>
+
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 15, gap: 10 }}>
+              <TouchableOpacity onPress={() => setEditModalVisible(false)} style={[globalStyles.button, { backgroundColor: '#eee', width: 100 }]}>
+                <Text style={{ color: '#333' }}>Annuler</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={saveEdit} style={[globalStyles.button, { width: 140 }]}>
+                <Text style={globalStyles.buttonText}>Sauvegarder</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
       <Sidebar isVisible={sidebarVisible} onClose={() => setSidebarVisible(false)} />
     </KeyboardAvoidingView>
   )
@@ -448,39 +500,12 @@ export default function PurchaseDetailScreen() {
 const styles = StyleSheet.create({
   header: { backgroundColor: colors.primary, padding: 20, paddingTop: 50, flexDirection: 'row', alignItems: 'center', borderBottomRightRadius: 25 },
   input: { borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 12, marginTop: 5, backgroundColor: 'white' },
-  suggestionBox: { 
-    backgroundColor: '#fff', 
-    borderWidth: 1, 
-    borderColor: colors.border, 
-    borderRadius: 8, 
-    marginTop: 2, 
-    position: 'absolute', 
-    top: 55, 
-    left: 0, 
-    right: 0, 
-    zIndex: 5000, 
-    maxHeight: 200,
-    ...shadows.md 
-  },
-  suggestionItem: { 
-    padding: 12, 
-    borderBottomWidth: 1, 
-    borderBottomColor: '#eee',
-    backgroundColor: 'white'
-  },
+  suggestionBox: { backgroundColor: '#fff', borderWidth: 1, borderColor: colors.border, borderRadius: 8, marginTop: 2, position: 'absolute', top: 55, left: 0, right: 0, zIndex: 5000, maxHeight: 200, ...shadows.md },
+  suggestionItem: { padding: 12, borderBottomWidth: 1, borderBottomColor: '#eee', backgroundColor: 'white' },
   tableCard: { backgroundColor: 'white', borderRadius: 12, ...shadows.sm, marginBottom: 50 },
   tableHeader: { flexDirection: 'row', backgroundColor: colors.primary, paddingVertical: 14 },
   tableRow: { flexDirection: 'row', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#eee', alignItems: 'center' },
   hCell: { color: 'white', fontSize: 11, fontWeight: 'bold', paddingHorizontal: 10 },
   cell: { fontSize: 12, color: colors.text, paddingHorizontal: 10 },
-  summaryBar: {
-    backgroundColor: colors.primary,
-    padding: 12,
-    borderRadius: 10,
-    marginBottom: 10,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    ...shadows.sm
-  }
+  summaryBar: { backgroundColor: colors.primary, padding: 12, borderRadius: 10, marginBottom: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', ...shadows.sm }
 })
