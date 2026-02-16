@@ -8,7 +8,8 @@ import {
   Alert, 
   KeyboardAvoidingView, 
   Platform,
-  Switch
+  Switch,
+  StyleSheet
 } from 'react-native'
 import { Picker } from '@react-native-picker/picker'
 import { useAuth } from '../../hooks/useAuth'
@@ -23,8 +24,11 @@ import { Feather } from '@expo/vector-icons'
 export default function PurchasesScreen() {
   const { user } = useAuth()
   const [cart, setCart] = useState<any[]>([])
+  
+  // Data Lists
   const [productTypes, setProductTypes] = useState<string[]>([])
   const [suppliers, setSuppliers] = useState<string[]>([])
+  const [existingProducts, setExistingProducts] = useState<any[]>([]) // <--- NEW: Store existing products
   const [loading, setLoading] = useState(false)
 
   // Form Fields
@@ -34,27 +38,34 @@ export default function PurchasesScreen() {
   const [type, setType] = useState('')
   
   // === INPUT STATES ===
-  const [mode, setMode] = useState<'standard' | 'box'>('standard') // 'standard' = Kg/L, 'box' = Boîte
+  const [mode, setMode] = useState<'standard' | 'box'>('standard')
   
   // Standard Inputs
-  const [stdQty, setStdQty] = useState('') // "10" (Kg)
-  const [stdPrice, setStdPrice] = useState('') // "20" (DH/Kg)
-  const [stdUnit, setStdUnit] = useState('L') // "L" or "Kg"
+  const [stdQty, setStdQty] = useState('') 
+  const [stdPrice, setStdPrice] = useState('') 
+  const [stdUnit, setStdUnit] = useState('L') 
 
   // Box Inputs
-  const [boxCount, setBoxCount] = useState('') // "5" (Boîtes)
-  const [boxPrice, setBoxPrice] = useState('') // "10" (DH/Boîte)
-  const [boxCap, setBoxCap] = useState('')     // "0.1" (L/Boîte)
-  const [boxRefUnit, setBoxRefUnit] = useState('L') // "L" (Unit of the capacity)
+  const [boxCount, setBoxCount] = useState('') 
+  const [boxPrice, setBoxPrice] = useState('') 
+  const [boxCap, setBoxCap] = useState('')     
+  const [boxRefUnit, setBoxRefUnit] = useState('L') 
 
   const [tva, setTva] = useState(20)
   const [matiereActive, setMatiereActive] = useState('')
   
   // UI Helpers
   const [showSupplierSuggestions, setShowSupplierSuggestions] = useState(false)
+  const [showProductSuggestions, setShowProductSuggestions] = useState(false) // <--- NEW
   const [sidebarVisible, setSidebarVisible] = useState(false)
 
+  // Filtered Lists
   const filteredSuppliers = suppliers.filter(s => s.toLowerCase().includes(fournisseur.toLowerCase())).slice(0, 5)
+  
+  // <--- NEW: Filter products based on typing
+  const filteredProducts = existingProducts.filter(p => 
+    p.nom.toLowerCase().includes(nom.toLowerCase())
+  ).slice(0, 5)
 
   useEffect(() => {
     if (user) loadInitialData()
@@ -62,13 +73,34 @@ export default function PurchasesScreen() {
 
   const loadInitialData = async () => {
     if (!user) return
-    const [typesRes, suppliersRes] = await Promise.all([
+    const [typesRes, suppliersRes, productsRes] = await Promise.all([
       Database.getProductTypes(user.id),
       Database.getSuppliers(user.id),
+      Database.obtenirProduits(user.id) // <--- NEW: Fetch products
     ])
     setProductTypes(typesRes || [])
     setSuppliers(suppliersRes || [])
+    setExistingProducts(productsRes || [])
     if (typesRes?.length > 0) setType(typesRes[0])
+  }
+
+  // <--- NEW: Handle selecting a product from suggestions
+  const selectExistingProduct = (prod: any) => {
+    setNom(prod.nom)
+    if (prod.type_produit) setType(prod.type_produit)
+    if (prod.matiere_active) setMatiereActive(prod.matiere_active)
+    
+    // Optional: Pre-fill units if you want
+    if (prod.is_box_unit) {
+        setMode('box')
+        setBoxRefUnit(prod.unite_reference)
+        if (prod.box_quantity) setBoxCap(prod.box_quantity.toString())
+    } else {
+        setMode('standard')
+        setStdUnit(prod.unite_reference)
+    }
+
+    setShowProductSuggestions(false)
   }
 
   // --- CALCULATOR ---
@@ -90,9 +122,8 @@ export default function PurchasesScreen() {
         const price = parseFloat(boxPrice) || 0
         const cap = parseFloat(boxCap) || 0
         totalHT = count * price
-        stockAdd = count * cap // 5 * 0.1 = 0.5
+        stockAdd = count * cap 
         stockUnitDisplay = boxRefUnit
-        // Price per L = (5 * 10) / 0.5 = 100
         pricePerRef = stockAdd > 0 ? totalHT / stockAdd : 0
     }
 
@@ -121,18 +152,11 @@ export default function PurchasesScreen() {
       type: type || 'Autre',
       matiere_active: matiereActive.trim(),
       tva,
-      // Logic for saving
       is_box_unit: mode === 'box',
-      
-      // Standard Data
-      quantite: mode === 'standard' ? parseFloat(stdQty) : parseFloat(boxCount), // Store "5" if box, "10" if std
-      unite: mode === 'standard' ? stdUnit : 'Boîte', // Display Unit
-      prix: mode === 'standard' ? parseFloat(stdPrice) : parseFloat(boxPrice), // Display Price
-      
-      // Box Specifics
+      quantite: mode === 'standard' ? parseFloat(stdQty) : parseFloat(boxCount),
+      unite: mode === 'standard' ? stdUnit : 'Boîte',
+      prix: mode === 'standard' ? parseFloat(stdPrice) : parseFloat(boxPrice),
       box_quantity: mode === 'box' ? parseFloat(boxCap) : null,
-      
-      // Pre-calculated for display/validation
       stock_preview: stockAdd,
       stock_unit_preview: mode === 'box' ? boxRefUnit : stdUnit,
       total_ttc: totalTTC
@@ -140,7 +164,6 @@ export default function PurchasesScreen() {
 
     setCart([...cart, newItem])
     
-    // Partial Reset
     setNom('')
     setStdQty(''); setStdPrice('')
     setBoxCount(''); setBoxPrice(''); setBoxCap('')
@@ -156,14 +179,14 @@ export default function PurchasesScreen() {
         nom: item.produit,
         type_produit: item.type,
         matiere_active: item.matiere_active,
-        quantite: item.quantite,       // e.g. 5 (Boxes) OR 10 (kg)
-        unite_achat: item.unite,       // e.g. "Boîte" OR "kg"
-        unite_ref: item.stock_unit_preview, // e.g. "L" (The real stock unit)
-        prix_u_ht: item.prix,          // e.g. 10 (Price per Box)
+        quantite: item.quantite,
+        unite_achat: item.unite,
+        unite_ref: item.stock_unit_preview,
+        prix_u_ht: item.prix,
         taux_tva: item.tva,
         fournisseur: fournisseur.trim(),
         date: dateAchat,
-        box_quantity: item.box_quantity, // e.g. 0.1
+        box_quantity: item.box_quantity,
         is_box_unit: item.is_box_unit
       }
       
@@ -172,9 +195,10 @@ export default function PurchasesScreen() {
     setLoading(false)
     setCart([])
     Alert.alert('Succès', 'Stock mis à jour avec succès !')
+    // Reload products to get latest list including any new ones created
+    const prods = await Database.obtenirProduits(user!.id)
+    setExistingProducts(prods)
   }
-
-  const totalCartValue = cart.reduce((sum, item) => sum + item.total_ttc, 0)
 
   return (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
@@ -199,17 +223,17 @@ export default function PurchasesScreen() {
             
             {/* Supplier / Date Row */}
             <View style={{ flexDirection: 'row', gap: 10, marginBottom: 10 }}>
-              <View style={{ flex: 1 }}>
+              <View style={{ flex: 1, zIndex: 2000 }}>
                 <Text style={typography.caption}>Fournisseur</Text>
                 <TextInput 
                   style={globalStyles.input} 
                   value={fournisseur} 
                   onChangeText={setFournisseur} 
-                  onFocus={() => setShowSupplierSuggestions(true)}
+                  onFocus={() => {setShowSupplierSuggestions(true); setShowProductSuggestions(false)}}
                   placeholder="Nom..."
                 />
                 {showSupplierSuggestions && filteredSuppliers.length > 0 && (
-                  <View style={{ position: 'absolute', top: 65, left: 0, right: 0, backgroundColor: 'white', zIndex: 100, borderWidth: 1, borderColor: '#eee', borderRadius: 8 }}>
+                  <View style={styles.suggestionBox}>
                     {filteredSuppliers.map(s => (
                       <TouchableOpacity key={s} onPress={() => { setFournisseur(s); setShowSupplierSuggestions(false)}} style={{ padding: 10 }}>
                         <Text>{s}</Text>
@@ -224,9 +248,35 @@ export default function PurchasesScreen() {
               </View>
             </View>
 
-            {/* Product Name / Type */}
-            <Text style={typography.caption}>Nom du Produit</Text>
-            <TextInput style={globalStyles.input} value={nom} onChangeText={setNom} placeholder="Ex: Pesticide X" />
+            {/* Product Name with Suggestions */}
+            <View style={{ zIndex: 1000 }}>
+                <Text style={typography.caption}>Nom du Produit</Text>
+                <TextInput 
+                    style={globalStyles.input} 
+                    value={nom} 
+                    onChangeText={(t) => { setNom(t); setShowProductSuggestions(true) }} 
+                    onFocus={() => {setShowProductSuggestions(true); setShowSupplierSuggestions(false)}}
+                    placeholder="Ex: Pesticide X" 
+                />
+                
+                {/* SUGGESTION DROPDOWN */}
+                {showProductSuggestions && filteredProducts.length > 0 && nom.length > 0 && (
+                    <View style={styles.suggestionBox}>
+                        {filteredProducts.map(p => (
+                            <TouchableOpacity 
+                                key={p.id} 
+                                onPress={() => selectExistingProduct(p)} 
+                                style={{ padding: 10, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' }}
+                            >
+                                <Text style={{fontWeight: 'bold', color: colors.primary}}>{p.nom}</Text>
+                                <Text style={{fontSize: 10, color: '#666'}}>
+                                    {p.type_produit} • {p.matiere_active ? p.matiere_active : 'Pas de MA'}
+                                </Text>
+                            </TouchableOpacity>
+                        ))}
+                    </View>
+                )}
+            </View>
 
             <View style={{ flexDirection: 'row', gap: 10 }}>
                <View style={{ flex: 1 }}>
@@ -239,7 +289,12 @@ export default function PurchasesScreen() {
                </View>
                <View style={{ flex: 1 }}>
                  <Text style={typography.caption}>Matière Active</Text>
-                 <TextInput style={globalStyles.input} value={matiereActive} onChangeText={setMatiereActive} placeholder="Optionnel" />
+                 <TextInput 
+                    style={globalStyles.input} 
+                    value={matiereActive} 
+                    onChangeText={setMatiereActive} 
+                    placeholder="Matiere Active" 
+                 />
                </View>
             </View>
           </View>
@@ -287,7 +342,7 @@ export default function PurchasesScreen() {
                 <TextInput style={globalStyles.input} value={stdPrice} onChangeText={setStdPrice} keyboardType="numeric" placeholder="Ex: 200" />
               </View>
             ) : (
-              // BOX MODE (FIXED LOGIC)
+              // BOX MODE
               <View style={{ backgroundColor: '#f0fdf4', padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#bbf7d0' }}>
                 <View style={{ flexDirection: 'row', gap: 10 }}>
                   <View style={{ flex: 1 }}>
@@ -318,7 +373,7 @@ export default function PurchasesScreen() {
               </View>
             )}
 
-            {/* LIVE PREVIEW - THIS SHOWS THE USER EXACTLY WHAT WILL HAPPEN */}
+            {/* LIVE PREVIEW */}
             <View style={{ marginTop: 16, backgroundColor: '#f8fafc', padding: 12, borderRadius: 8, borderLeftWidth: 4, borderLeftColor: colors.gold }}>
                <Text style={{ fontSize: 13, color: colors.textSecondary, marginBottom: 4 }}>Résumé de l'entrée en stock :</Text>
                
@@ -345,7 +400,7 @@ export default function PurchasesScreen() {
                </View>
             </View>
 
-            {/* VAT Selection */}
+            {/* VAT */}
             <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 12, justifyContent: 'flex-end' }}>
                <Text style={[typography.caption, { marginRight: 8, marginBottom: 0 }]}>TVA:</Text>
                <View style={[styles.pickerWrap, { width: 90, height: 36, marginBottom: 0 }]}>
@@ -396,7 +451,7 @@ export default function PurchasesScreen() {
   )
 }
 
-const styles = {
+const styles = StyleSheet.create({
   pickerWrap: {
     borderWidth: 1,
     borderColor: colors.border,
@@ -404,5 +459,17 @@ const styles = {
     backgroundColor: '#fff',
     height: 50,
     justifyContent: 'center'
+  },
+  suggestionBox: {
+    position: 'absolute',
+    top: 65, 
+    left: 0, 
+    right: 0, 
+    backgroundColor: 'white', 
+    zIndex: 100, 
+    borderWidth: 1, 
+    borderColor: '#eee', 
+    borderRadius: 8,
+    ...shadows.md
   }
-}
+})
